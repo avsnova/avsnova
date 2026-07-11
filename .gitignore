@@ -27,10 +27,13 @@ emails.log
 
 # Caches
 .cache/
+.npm/
 .vite/
 .turbo/
 .eslintcache
 coverage/
+*.tgz
+*.tar.gz
 
 # Uploads (runtime user content)
 uploads/
