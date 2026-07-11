@@ -1,0 +1,32 @@
+{
+  "name": "Aurevashop — Digital Finance, Evolved",
+  "short_name": "Aurevashop",
+  "description": "Your all-in-one digital finance and services platform. Fund wallets, buy virtual numbers, grow your socials, buy eSIMs, gifts and more.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "portrait-primary",
+  "background_color": "#03000a",
+  "theme_color": "#03000a",
+  "lang": "en",
+  "dir": "ltr",
+  "categories": ["finance", "shopping", "business", "productivity"],
+  "icons": [
+    { "src": "/icon-72.png", "sizes": "72x72", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-96.png", "sizes": "96x96", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-128.png", "sizes": "128x128", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-144.png", "sizes": "144x144", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-152.png", "sizes": "152x152", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-384.png", "sizes": "384x384", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "My Wallet", "short_name": "Wallet", "url": "/?tab=wallet", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Marketplace", "short_name": "Shop", "url": "/?tab=marketplace", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] },
+    { "name": "My Orders", "short_name": "Orders", "url": "/?tab=orders", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] }
+  ]
+}

@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+out/
+
+# Environment & secrets (NEVER commit)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.netrc
+
+# Database (runtime data — not source)
+database.sqlite
+database.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+
+# Logs
+*.log
+logs/
+emails.log
+
+# Caches
+.cache/
+.vite/
+.turbo/
+.eslintcache
+coverage/
+
+# Uploads (runtime user content)
+uploads/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
