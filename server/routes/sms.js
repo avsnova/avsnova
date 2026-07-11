@@ -6,6 +6,9 @@ import { getCatalog, getLivePrice, allocateNumber, pollSmsCode, setActivationSta
 import * as smsProviders from '../services/sms/providerRouter.js';
 import { serviceDisplayName, validateNumberCountry, isValidPhoneFormat } from '../services/sms/smsMappings.js';
 import { logProviderCall } from '../services/sms/smsLog.js';
+import { safePurchase } from '../services/sms/purchaseGuard.js';
+import { isEnabled as flagEnabled } from '../services/featureFlags.js';
+import crypto from 'crypto';
 
 const router = express.Router();
 
@@ -383,6 +386,85 @@ router.post('/allocate', async (req, res) => {
 
     const user = await dbGet("SELECT wallet_balance FROM users WHERE id = ?", [req.user.id]);
     if (!user || user.wallet_balance < quotedCostNgn) return res.status(400).json({ error: `Insufficient balance! Line allocation requires ₦${quotedCostNgn.toLocaleString()}` });
+
+    // ════════════════════════════════════════════════════════════════════════════════════════
+    // LOSS-PREVENTION PATH (§7) — gated behind the `sms_txn_safe_purchase` feature flag.
+    // Enforces: atomic wallet debit → local order → provider buy, with auto-refund + row removal
+    // if the provider fails. Duplicate purchases blocked by a DB unique idempotency key. When the
+    // flag is OFF the original proven flow below runs unchanged (backward compatible).
+    // ════════════════════════════════════════════════════════════════════════════════════════
+    if (await flagEnabled("sms_txn_safe_purchase", false)) {
+      const rate2 = rate, pricing2 = pricing;
+      const isoNow = new Date().toISOString();
+      // Independent internal order id (§7: internal id ≠ provider order id).
+      const internalId = `AVS-VN-${Date.now().toString(36)}-${crypto.randomBytes(3).toString("hex")}`;
+      const txRef = `AVS-SMS-${internalId}`;
+      // Idempotency key (§7 duplicate prevention): prefer a client-supplied key (one per user
+      // click) so a double-submit/retry of the SAME action collapses to one order, while a
+      // deliberate second purchase (new click → new key) is allowed. Falls back to a 4s server
+      // bucket to still catch rapid double-clicks from older clients.
+      const clientKey = (req.body && typeof req.body.idempotencyKey === "string") ? req.body.idempotencyKey.slice(0, 80) : "";
+      const idemKey = clientKey
+        ? `${req.user.id}:${clientKey}`
+        : `${req.user.id}:${realCountry}:${service}:${Math.floor(Date.now() / 4000)}`;
+
+      // Resolve display names up-front (never persist raw provider codes).
+      let countryName = `Country ${country}`, countryFlag = "🌐";
+      try { const cRow = await dbGet("SELECT name, flag FROM sms_countries WHERE id = ?", [realCountry]); if (cRow) { countryName = cRow.name; countryFlag = cRow.flag || countryFlag; } } catch (e) {}
+      let serviceName = serviceDisplayName(service);
+      try { const sRow = await dbGet("SELECT name FROM sms_services WHERE id = ? LIMIT 1", [service]); if (sRow && sRow.name) serviceName = sRow.name; } catch (e) {}
+
+      let bought = null;
+      const out = await safePurchase(
+        { dbRun, dbGet, audit: ({ event, detail, status }) => smsAudit({ event, provider: "guard", detail, status: status || "ok", userId: req.user.id }) },
+        {
+          userId: req.user.id, amountNgn: quotedCostNgn, idempotencyKey: idemKey,
+          createLocalOrder: async () => {
+            // Insert a PENDING placeholder holding the idempotency key (blocks duplicates at the DB).
+            await dbRun(
+              "INSERT INTO virtual_numbers (id, user_id, number, country, flag, service, status, cost, created_at, country_code, service_code, provider, idempotency_key, transaction_ref, review_status) VALUES (?, ?, '', ?, ?, ?, 'pending', ?, ?, ?, ?, '', ?, ?, NULL)",
+              [internalId, req.user.id, countryName, countryFlag, serviceName, quotedCostNgn, isoNow, country, service, idemKey, txRef]
+            );
+          },
+          buyFromProvider: async () => {
+            // Multi-provider (validated, with failover) when enabled; else Grizzly with validation.
+            if (multiActive) {
+              const b = await smsProviders.buyWithFallback(realCountry, service, req.user.id);
+              bought = { provider: b.provider, number: b.number, providerSessionId: b.providerSessionId, providerOrderId: b.providerSessionId, costUsd: b.costUsd || quotedCostUsd, expiresAt: b.expiresAt || null };
+            } else {
+              const a = await allocateNumber(realCountry, service);
+              const cc = validateNumberCountry(realCountry, a.number);
+              if (!cc.ok || !isValidPhoneFormat(a.number)) { try { await setActivationStatus(a.id, 8); } catch (e) {} const err = new Error("WRONG_COUNTRY"); throw err; }
+              bought = { provider: "grizzly", number: a.number, providerSessionId: String(a.id), providerOrderId: String(a.id), costUsd: quotedCostUsd, expiresAt: null };
+            }
+            return bought;
+          },
+          removeLocalOrder: async () => { await dbRun("DELETE FROM virtual_numbers WHERE id = ?", [internalId]); },
+          recordTxn: async (result) => {
+            const providerCostNgn = Math.round((result.costUsd || quotedCostUsd) * rate2);
+            const realProfit = quotedCostNgn - providerCostNgn;
+            // Promote the pending row to active with the real number + provider linkage.
+            await dbRun(
+              "UPDATE virtual_numbers SET number = ?, status = 'active', expires_at = ?, provider = ?, provider_session_id = ?, provider_order_id = ? WHERE id = ?",
+              [result.number, result.expiresAt, result.provider, result.providerSessionId, result.providerOrderId, internalId]
+            );
+            await dbRun(
+              "INSERT INTO orders (id, user_id, service_id, category, name, quantity, price, currency, status, delivery_type, tracking_number, created_at, updated_at) VALUES (?, ?, ?, 'SMS', ?, 1, ?, 'NGN', 'completed', 'instant', ?, ?, ?)",
+              [internalId, req.user.id, `sms_${country}_${service}`, `${countryName} ${serviceName} Number`, quotedCostNgn, internalId, isoNow, isoNow]
+            );
+            await logTransaction(req.user.id, txRef, quotedCostNgn, "purchase", "SMS Panel", `Allocated secure live line: +${result.number} for ${serviceName}`, realProfit, providerCostNgn, 'pending');
+            await addNotification(req.user.id, "system", `Allocated secure live line +${result.number} for ${serviceName}`);
+          },
+        }
+      );
+
+      if (!out.ok) {
+        const status = out.code === "INSUFFICIENT_FUNDS" ? 400 : out.code === "DUPLICATE" ? 429 : 502;
+        return res.status(status).json({ error: out.error });
+      }
+      // Mask the provider from the customer (§ "customer must not know provider").
+      return res.json({ success: true, id: internalId, number: bought.number, activationId: internalId });
+    }
 
     // ---- Buy the number (with automatic provider fallback when multi is active) ----
     // `provider` identifies which upstream filled it; `internalId` is our DB primary key.

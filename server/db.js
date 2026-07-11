@@ -250,6 +250,37 @@ export const initDb = async () => {
     try { await dbRun("INSERT INTO sms_provider_health (provider, online, updated_at) VALUES (?, 1, ?) ON CONFLICT(provider) DO NOTHING", [p, new Date().toISOString()]); } catch (err) {}
   }
 
+  // 2A-d. Feature flags (§19). Runtime on/off switches so major features can be toggled without
+  // a redeploy. Every new Virtual-Number-restructure behavior is gated here; defaults keep the
+  // CURRENT proven behavior so nothing changes until an admin explicitly opts in.
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS feature_flags (
+      key VARCHAR(64) PRIMARY KEY,
+      enabled INTEGER DEFAULT 0,
+      description TEXT,
+      updated_at VARCHAR(255),
+      updated_by VARCHAR(128)
+    )
+  `);
+  const DEFAULT_FLAGS = [
+    ["sms_txn_safe_purchase", 0, "Transaction-safe purchase: wallet+order+provider are all-or-nothing with auto-refund on provider failure."],
+    ["sms_safe_cancellation", 0, "Safe cancellation: only refund when the provider confirms; otherwise flag for admin review."],
+    ["sms_compare_and_choose", 0, "Customer compare-and-choose screen (masked providers) instead of auto-routing."],
+    ["sms_mask_provider", 1, "Hide the upstream provider identity from customers (provider name/logo never exposed)."],
+  ];
+  for (const [k, en, desc] of DEFAULT_FLAGS) {
+    try { await dbRun("INSERT INTO feature_flags (key, enabled, description, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(key) DO UPDATE SET description = excluded.description", [k, en, desc, new Date().toISOString()]); } catch (err) {}
+  }
+
+  // 2A-e. Loss-prevention columns on virtual_numbers (§7). Idempotency + traceability so a
+  // purchase can never double-charge and every order links wallet↔local↔provider. Additive.
+  try { await dbRun("ALTER TABLE virtual_numbers ADD COLUMN transaction_ref VARCHAR(128)"); } catch (err) {}
+  try { await dbRun("ALTER TABLE virtual_numbers ADD COLUMN provider_order_id VARCHAR(128)"); } catch (err) {}
+  try { await dbRun("ALTER TABLE virtual_numbers ADD COLUMN idempotency_key VARCHAR(128)"); } catch (err) {}
+  try { await dbRun("ALTER TABLE virtual_numbers ADD COLUMN review_status VARCHAR(32)"); } catch (err) {}
+  // Unique idempotency key prevents duplicate purchases from double-clicks/retries at the DB level.
+  try { await dbRun("CREATE UNIQUE INDEX IF NOT EXISTS uniq_vn_idempotency ON virtual_numbers(idempotency_key)"); } catch (err) {}
+
   // 2B. Grizzly SMS Preloaded Countries (Requirement 5!)
   await dbRun(`
     CREATE TABLE IF NOT EXISTS sms_countries (

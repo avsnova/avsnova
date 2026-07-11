@@ -18,6 +18,7 @@ import { encryptSecret as mailEncrypt, decryptSecret as mailDecrypt, maskEmail, 
 import * as tg from "./services/telegramService.js";
 import * as smsProviderRouter from "./services/sms/providerRouter.js";
 import * as smsHealth from "./services/sms/smsHealth.js";
+import * as featureFlags from "./services/featureFlags.js";
 
 // Load environment variables
 dotenv.config();
@@ -4641,6 +4642,23 @@ app.get("/api/admin/sms/route-plan", authenticateToken, async (req, res) => {
 // ——— Admin: unified Provider Overview Dashboard (SMS + SMM at a glance) ———
 // One call returns health for every SMS provider (from the routing engine's health table) and
 // every SMM provider (from api_balance_cache + sync_log). Read-only; safe to poll.
+// ——— Admin: Feature Flags (§19) — toggle major features without a redeploy ———
+app.get("/api/admin/feature-flags", authenticateToken, async (req, res) => {
+  if (!isUserAdmin(req.user)) return res.status(403).json({ error: "Access denied." });
+  try { res.json({ success: true, flags: await featureFlags.getAllFlags() }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+app.post("/api/admin/feature-flags", authenticateToken, async (req, res) => {
+  if (!isUserAdmin(req.user)) return res.status(403).json({ error: "Access denied." });
+  const { key, enabled } = req.body || {};
+  if (!key) return res.status(400).json({ error: "key is required." });
+  try {
+    const now = await featureFlags.setFlag(key, !!enabled, req.user.username || req.user.email);
+    await logAuditAction(req.user.id, req.user.username || req.user.email, `Feature flag '${key}' set to ${enabled ? "ON" : "OFF"}`, req.ip);
+    res.json({ success: true, key, enabled: now });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.get("/api/admin/providers/overview", authenticateToken, async (req, res) => {
   if (!isUserAdmin(req.user)) return res.status(403).json({ error: "Access denied." });
   try {

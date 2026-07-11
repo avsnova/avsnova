@@ -6,6 +6,9 @@
   "scripts": {
     "dev": "concurrently \"npm run server\" \"vite --host 0.0.0.0\"",
     "server": "node server/index.js",
+    "migrate": "node server/migrations/runner.js up",
+    "migrate:down": "node server/migrations/runner.js down",
+    "migrate:status": "node server/migrations/runner.js status",
     "build": "vite build",
     "preview": "vite preview"
   },
