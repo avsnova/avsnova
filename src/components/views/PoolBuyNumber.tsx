@@ -5,6 +5,7 @@ import {
 } from "lucide-react";
 import { apiFetch } from "../../utils/api";
 import { copyToClipboard } from "../../utils/clipboard";
+import { CountryFlag, ServiceLogo } from "../ui/BrandIcon";
 import { useToast } from "../ui/Toast";
 import { useConfirm } from "../ui/ConfirmDialog";
 
@@ -261,6 +262,7 @@ export default function PoolBuyNumber({ walletBalance = 0, onAddNotification }: 
                   <button key={c.id} onClick={() => setCountry(c)}
                     className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg border cursor-pointer transition-all ${country?.id === c.id ? "bg-cyan-500/15 border-cyan-500/40" : "bg-black/20 border-transparent hover:border-purple-400/20"}`}>
                     <span className="flex items-center gap-2 text-sm text-white truncate">
+                      <CountryFlag country={c.name} size={18} className="shrink-0" />
                       <span className="truncate">{c.name}</span>
                       {c.prefix ? <span className="text-[10px] text-purple-300/50">+{c.prefix}</span> : null}
                     </span>
@@ -286,6 +288,7 @@ export default function PoolBuyNumber({ walletBalance = 0, onAddNotification }: 
                     className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg border transition-all ${!s.inStock ? "opacity-45 cursor-not-allowed border-transparent" : service?.id === s.id ? "bg-cyan-500/15 border-cyan-500/40 cursor-pointer" : "bg-black/20 border-transparent hover:border-purple-400/20 cursor-pointer"}`}>
                     <span className="flex items-center gap-2 min-w-0">
                       <Star onClick={(e) => { e.stopPropagation(); toggleFav("s", s.id); }} className={`h-3.5 w-3.5 shrink-0 ${isFav("s", s.id) ? "fill-amber-400 text-amber-400" : "text-purple-400/40 hover:text-amber-300"}`} />
+                      <ServiceLogo name={s.name} size={18} className="shrink-0" />
                       <span className="text-sm text-white truncate">{s.name}</span>
                     </span>
                     <span className="flex items-center gap-2 shrink-0">
@@ -336,6 +339,7 @@ export default function PoolBuyNumber({ walletBalance = 0, onAddNotification }: 
                   <div className="flex items-center justify-between flex-wrap gap-2">
                     <div className="flex items-center gap-2.5 min-w-0">
                       <span className="px-2 py-0.5 rounded-md bg-purple-500/15 text-purple-200 text-[10px] font-bold shrink-0">{l.poolLabel || "Pool"}</span>
+                      <CountryFlag country={l.country} size={16} className="shrink-0" />
                       <span className="text-white font-mono font-bold text-sm truncate">+{l.number}</span>
                       <button onClick={() => copy(l.number, "num-" + l.id)} title="Copy number" className="text-purple-300/50 hover:text-white cursor-pointer shrink-0">
                         {copiedKey === "num-" + l.id ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
@@ -353,7 +357,7 @@ export default function PoolBuyNumber({ walletBalance = 0, onAddNotification }: 
                     <Field label="Last sync" value={ago(l.last_sync)} />
                   </div>
                   {l.otpReceived ? (
-                    <div className="mt-2.5 flex items-center justify-between rounded-lg bg-emerald-500/10 border border-emerald-500/20 px-3 py-2">
+                    <div className="mt-2.5 flex items-center justify-between rounded-lg bg-emerald-500/15 border border-emerald-500/40 px-3 py-2 animate-[fadeIn_0.3s_ease] ring-1 ring-emerald-400/30">
                       <span className="text-emerald-200 text-xs">OTP: <span className="font-mono font-bold text-base text-white tracking-wider">{l.otpReceived}</span></span>
                       <button onClick={() => copy(l.otpReceived!, "otp-" + l.id)} title="Copy code" className="text-emerald-300 hover:text-white cursor-pointer">
                         {copiedKey === "otp-" + l.id ? <CheckCircle2 className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
