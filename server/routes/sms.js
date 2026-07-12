@@ -296,6 +296,10 @@ router.get('/numbers', async (req, res) => {
   try {
     const pricing = await getPricingSettings();
     const sessionTimeout = pricing.sms_session_timeout || 1200;
+    // Per-pool manual session windows (Grizzly = 1200s). Used to auto-expire Grizzly lines since
+    // Grizzly exposes no expiry of its own.
+    const poolSessionByProvider = {};
+    try { const pls = await dbAll("SELECT provider, session_seconds FROM sms_pools"); for (const p of pls) poolSessionByProvider[p.provider] = p.session_seconds ? parseInt(p.session_seconds) : null; } catch (e) {}
     const rows = await dbAll("SELECT * FROM virtual_numbers WHERE user_id = ? AND status = 'active'", [req.user.id]);
     
     for (const r of rows) {
@@ -303,6 +307,8 @@ router.get('/numbers', async (req, res) => {
         const poll = await pollLineCode(r);
         const elapsed = Math.floor((Date.now() - new Date(r.created_at).getTime()) / 1000);
         const provLabel = (r.provider || "grizzly");
+        // Effective session for THIS line: provider-truth expiry wins; else the pool's manual window.
+        const effSession = poolSessionByProvider[provLabel] || sessionTimeout;
         // Provider-truth expiry: persist the provider's real expiration when it exposes one
         // (5SIM/SMSPool). Grizzly exposes none, so we leave expires_at null (UI shows Unavailable).
         if (poll && poll.expiresAt && poll.expiresAt !== r.expires_at) {
@@ -330,9 +336,9 @@ router.get('/numbers', async (req, res) => {
             try { await dbRun("UPDATE transactions SET status = 'completed', updated_at = ? WHERE reference = ?", [new Date().toISOString(), `AVS-SMS-${r.id}`]); } catch (e) {}
             try { await completeLine(r); } catch (e) {}
           }
-        } else if (poll.status === "cancelled" || elapsed >= sessionTimeout) {
-          // Auto-expire after the admin-configured session timeout (Requirement 9)
-          const targetStatus = elapsed >= sessionTimeout ? 'expired' : 'cancelled';
+        } else if (poll.status === "cancelled" || elapsed >= effSession) {
+          // Auto-expire after the pool's session window (provider-truth expiry already applied above).
+          const targetStatus = elapsed >= effSession ? 'expired' : 'cancelled';
 
           // Atomically claim the transition so only one poller performs the refund/side-effects.
           const upd = await dbRun("UPDATE virtual_numbers SET status = ? WHERE id = ? AND status = 'active'", [targetStatus, r.id]);
@@ -357,26 +363,31 @@ router.get('/numbers', async (req, res) => {
     const serverNow = Date.now();
     // Map provider -> masked pool label (customer must never see the real provider name).
     let poolByProvider = {};
-    try { const pls = await dbAll("SELECT provider, label FROM sms_pools"); for (const p of pls) poolByProvider[p.provider] = p.label; } catch (e) {}
+    // Per-provider pool config: masked label + MANUAL timer settings (used when the provider
+    // exposes no timers of its own, e.g. Grizzly = 20-min session / 5-min cancel lock).
+    const poolCfgByProvider = {};
+    try { const pls = await dbAll("SELECT provider, label, session_seconds, cancel_lock_seconds FROM sms_pools"); for (const p of pls) { poolByProvider[p.provider] = p.label; poolCfgByProvider[p.provider] = p; } } catch (e) {}
     res.json(allRows.map(r => {
       // Server-authoritative timing: compute remaining seconds & expiry here so the client
       // renders exactly what the server says (no client-side drift or fake countdowns).
       const createdMs = new Date(r.created_at).getTime();
+      const prov = r.provider || "grizzly";
+      const pcfg = poolCfgByProvider[prov] || {};
+      // Per-pool manual timers (fall back to global settings, then hard defaults). Grizzly's are
+      // seeded to 1200s session / 300s (5-min) cancel lock.
+      const poolSession = pcfg.session_seconds ? parseInt(pcfg.session_seconds) : sessionTimeout;
+      const poolCancelLock = pcfg.cancel_lock_seconds != null ? parseInt(pcfg.cancel_lock_seconds) : (pricing.sms_cancel_delay || 120);
       // PROVIDER-TRUTH expiry: if the upstream gave a real expiration (5SIM/SMSPool), honor it.
-      // Grizzly has no expiry API, so it falls back to the admin-configured session window.
+      // Grizzly has no expiry API, so it falls back to this pool's MANUAL session window (20 min).
       const providerExpiryMs = r.expires_at ? new Date(r.expires_at).getTime() : null;
-      const expiresMs = (providerExpiryMs && !isNaN(providerExpiryMs)) ? providerExpiryMs : createdMs + sessionTimeout * 1000;
+      const expiresMs = (providerExpiryMs && !isNaN(providerExpiryMs)) ? providerExpiryMs : createdMs + poolSession * 1000;
       const remaining = r.status === "active" ? Math.max(0, Math.floor((expiresMs - serverNow) / 1000)) : 0;
-      // Provider-aware cancellation window: GrizzlySMS only accepts a cancel (setStatus=8)
-      // after an initial ~2-minute lock. Expose this so the UI shows Cancel ONLY when the
-      // provider will actually honor it (and never a disabled/premature button).
+      // Provider-aware cancellation window: the Cancel/Release button unlocks only after the
+      // pool's cancel lock (Grizzly = 5 min) so the provider will actually honor the cancel.
       const elapsedSecs = Math.floor((serverNow - createdMs) / 1000);
-      // Admin-configurable cancellation delay (settings.sms_cancel_delay) — applied server-side
-      // immediately, no hardcoded value, no rebuild required.
-      const CANCEL_LOCK = pricing.sms_cancel_delay || 120;
+      const CANCEL_LOCK = poolCancelLock;
       const cancellable = r.status === "active" && !r.otp_received && elapsedSecs >= CANCEL_LOCK;
       const cancelInSecs = r.status === "active" && !r.otp_received ? Math.max(0, CANCEL_LOCK - elapsedSecs) : 0;
-      const prov = r.provider || "grizzly";
       // providerTimer = true when the remaining time comes from the provider's OWN expiry
       // (5SIM/SMSPool). false = provider exposes no timer (Grizzly) -> UI shows it as estimated.
       const providerTimer = !!(providerExpiryMs && !isNaN(providerExpiryMs));
@@ -621,23 +632,28 @@ router.post('/action/:numberId', async (req, res) => {
 
     if (action === 8 && line.status === "active") {
       const elapsed = Math.floor((Date.now() - new Date(line.created_at).getTime()) / 1000);
-      // Manual override: admins can cancel anytime. Regular users respect a 2-minute
-      // provider lock window (below which providers reject cancellations).
+      // Per-pool cancel lock (Grizzly = 5 min). Admins may override anytime. The Release/Cancel
+      // button only appears client-side after this window, but we ALSO enforce it server-side.
+      const prov = line.provider || "grizzly";
+      let cancelLock = 120;
+      try { const pc = await dbGet("SELECT cancel_lock_seconds FROM sms_pools WHERE provider = ? LIMIT 1", [prov]); if (pc && pc.cancel_lock_seconds != null) cancelLock = parseInt(pc.cancel_lock_seconds); } catch (e) {}
       const isAdmin = req.user.role === "Super Admin" || req.user.role === "Admin";
-      if (!isAdmin && elapsed < 120) {
-        return res.status(400).json({ error: "Cancellation is locked during the initial 2 minutes waiting window." });
+      if (!isAdmin && elapsed < cancelLock) {
+        return res.status(400).json({ error: `Cancellation is locked for the first ${Math.round(cancelLock / 60)} minutes. Please wait, an SMS may still arrive.` });
       }
 
-      // CRITICAL CANCELLATION RULE: the provider is the source of truth. We send the cancel
-      // request upstream FIRST and only mark it cancelled locally AFTER the provider confirms.
-      // If the provider rejects/fails, the order stays ACTIVE locally and no refund is issued.
-      await smsAudit({ event: "cancel_request", provider: line.provider || "grizzly", detail: `line=${numberId} session=${line.provider_session_id || numberId}`, userId: req.user.id });
+      // CRITICAL CANCELLATION RULE: the PROVIDER is the source of truth. We send the cancel to
+      // the provider FIRST and only mark it cancelled + refund locally AFTER the provider confirms.
+      // If the provider refuses/fails, the number STAYS ACTIVE locally, NO refund is given, and the
+      // customer is told to try again later. The order never "leaves the terminal" unless the
+      // provider actually released it.
+      await smsAudit({ event: "cancel_request", provider: prov, detail: `line=${numberId} session=${line.provider_session_id || numberId}`, userId: req.user.id });
       try {
         await cancelLine(line);
-        await smsAudit({ event: "cancel_confirmed", provider: line.provider || "grizzly", detail: `line=${numberId} provider confirmed cancellation`, userId: req.user.id });
+        await smsAudit({ event: "cancel_confirmed", provider: prov, detail: `line=${numberId} provider confirmed cancellation`, userId: req.user.id });
       } catch (err) {
-        await smsAudit({ event: "cancel_rejected", provider: line.provider || "grizzly", detail: `line=${numberId} rejected: ${err.message}`, status: "fail", userId: req.user.id });
-        return res.status(409).json({ error: "Cancellation is still pending — the provider has not confirmed it (an SMS may have just arrived). The line remains active. Please refresh and try again." });
+        await smsAudit({ event: "cancel_rejected", provider: prov, detail: `line=${numberId} rejected: ${err.message}`, status: "fail", userId: req.user.id });
+        return res.status(409).json({ error: "Couldn't cancel this number yet — the provider hasn't released it (an SMS may be on the way). The number is still active. Please try again later." });
       }
 
       // Atomically claim the cancellation so a double-click can only refund once.

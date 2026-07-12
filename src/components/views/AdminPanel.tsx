@@ -27,6 +27,7 @@ import UserSessionsPanel from "../admin/UserSessionsPanel";
 import SecurityCenterAdmin from "../admin/SecurityCenterAdmin";
 import SmsConfigCenter from "../admin/SmsConfigCenter";
 import ProviderOverviewDashboard from "../admin/ProviderOverviewDashboard";
+import SmsPoolsAdmin from "../admin/SmsPoolsAdmin";
 import AdminSideNav, { AdminComingSoon, adminNavItemId, type AdminNavItem, type AdminNavSection } from "../admin/AdminSideNav";
 import AdvancedCredentialManager from "../admin/AdvancedCredentialManager";
 import FormBuilder from "../admin/FormBuilder";
@@ -287,6 +288,7 @@ const ADMIN_NAV_SECTIONS: AdminNavSection[] = [
       { label: "Settings Rollback", tab: "settings_rollback" },
       { label: "Security Center", tab: "security" },
       { label: "Provider Overview", tab: "provider_overview" },
+      { label: "SMS Pools", tab: "sms_pools" },
       { label: "SMS Configuration", tab: "sms_config" },
       { label: "SMS Management", tab: "sms" },
       { label: "Health Monitor", tab: "health" },
@@ -3835,6 +3837,7 @@ export default function AdminPanel() {
       {/* ——— TAB VIEW: SECURITY CENTER (Phase 1 — Authenticator/TOTP) ——— */}
       {activeTab === "security" && <SecurityCenterAdmin />}
       {activeTab === "provider_overview" && <div className="font-inter"><ProviderOverviewDashboard /></div>}
+      {activeTab === "sms_pools" && <div className="font-inter"><SmsPoolsAdmin /></div>}
       {activeTab === "sms_config" && <div className="font-inter"><SmsConfigCenter /></div>}
 
       {/* ——— TAB VIEW: INTERNATIONAL GIFT DELIVERY (Requirement 23) ——— */}

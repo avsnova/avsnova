@@ -298,6 +298,15 @@ export const initDb = async () => {
   for (const [pid, prov, label, en, ord] of DEFAULT_POOLS) {
     try { await dbRun("INSERT INTO sms_pools (id, provider, label, enabled, hidden, sort_order, markup_type, markup_value, updated_at) VALUES (?, ?, ?, ?, 0, ?, 'flat', 1300, ?) ON CONFLICT(id) DO NOTHING", [pid, prov, label, en, ord, new Date().toISOString()]); } catch (err) {}
   }
+  // Per-pool MANUAL timer config (additive). Used only when the provider does NOT expose its own
+  // timers (e.g. Grizzly). session_seconds = how long the number stays active before auto-expire;
+  // cancel_lock_seconds = wait before the Cancel/Release button unlocks. Providers that expose
+  // real timers (5SIM/SMSPool) use those for expiry and keep a short cancel lock.
+  try { await dbRun("ALTER TABLE sms_pools ADD COLUMN session_seconds INTEGER DEFAULT 1200"); } catch (err) {}
+  try { await dbRun("ALTER TABLE sms_pools ADD COLUMN cancel_lock_seconds INTEGER DEFAULT 120"); } catch (err) {}
+  // Grizzly requirement: 20-minute session, 5-minute cancel lock. Set as its manual defaults.
+  try { await dbRun("UPDATE sms_pools SET session_seconds = 1200, cancel_lock_seconds = 300 WHERE provider = 'grizzly' AND (session_seconds IS NULL OR session_seconds = 0)"); } catch (err) {}
+  try { await dbRun("UPDATE sms_pools SET cancel_lock_seconds = 300 WHERE provider = 'grizzly' AND cancel_lock_seconds = 120"); } catch (err) {}
 
   // 2A-e. Loss-prevention columns on virtual_numbers (§7). Idempotency + traceability so a
   // purchase can never double-charge and every order links wallet↔local↔provider. Additive.

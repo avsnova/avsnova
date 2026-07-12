@@ -4722,6 +4722,9 @@ app.post("/api/admin/sms/pools/:poolId", authenticateToken, async (req, res) => 
     if (b.provider !== undefined && ["grizzly", "smspool", "fivesim"].includes(b.provider)) set("provider", b.provider);
     if (b.markup_type !== undefined && ["flat", "percent"].includes(b.markup_type)) set("markup_type", b.markup_type);
     if (b.markup_value !== undefined && !isNaN(parseFloat(b.markup_value))) set("markup_value", parseFloat(b.markup_value));
+    // Manual timer config (used when the provider exposes no timers, e.g. Grizzly). Clamped to sane ranges.
+    if (b.session_seconds !== undefined && !isNaN(parseInt(b.session_seconds))) set("session_seconds", Math.max(60, Math.min(7200, parseInt(b.session_seconds))));
+    if (b.cancel_lock_seconds !== undefined && !isNaN(parseInt(b.cancel_lock_seconds))) set("cancel_lock_seconds", Math.max(0, Math.min(3600, parseInt(b.cancel_lock_seconds))));
     if (!sets.length) return res.json({ success: true, message: "No changes." });
     set("updated_at", new Date().toISOString());
     p.push(req.params.poolId);
