@@ -63,3 +63,46 @@ price → buy (correct +49, provider masked) → `/numbers` (provider-truth rema
 
 The customer-facing page still uses the previous flow until the new pool page is built and enabled;
 this phase delivered and proved the correctness-critical backend that makes the pool page safe.
+
+## Phase 2 — Customer UI + provider-truth timers (DONE, verified live)
+
+### New customer page: `src/components/views/PoolBuyNumber.tsx`
+Modern, responsive, self-contained Buy Number experience:
+- 3-step flow: pick Pool → that pool's OWN countries (searchable, favorites) → services
+  (searchable, live price + stock, favorites). Provider is masked (only "Pool 1/2/3" shown).
+- Loading skeletons, empty/out-of-stock/error states, retry buttons.
+- Confirmation dialog before buying: pool, service, country, provider price, markup, final price.
+- Double-click protection (in-flight lock + idempotency key + disabled button + spinner).
+- Active orders: masked pool label, number, live status, remaining/cancel timers, last-sync time,
+  OTP display + copy, confirm-before-cancel.
+- Wired into `SMSPanelView` behind pools mode: if any customer-visible pool is enabled it renders
+  the new page; otherwise the classic view (fully reversible by disabling pools).
+
+### Provider-truth timers
+- 5SIM (`/user/check` → `expires`,`created_at`) and SMSPool (`/sms/check` → `expiration`,`time_left`)
+  expose real timers → surfaced exactly (`providerTimer: true`).
+- Grizzly's `getStatus` exposes NO timer → we label it "estimated" and set `providerTimer: false`.
+  We do NOT fabricate a provider timer for Grizzly (honest per the FIRST RULE).
+- `/api/sms/numbers` now persists + returns provider expiry, `providerTimer` flag, `poolLabel`
+  (masked), and `last_sync`.
+
+### Live acceptance test results (real APIs, refunded)
+- Masked pools list ✓ · 5SIM Germany services w/ live price+stock ✓
+- Buy 5SIM Germany → +49 (correct country) ✓ · Grizzly UK → +44 ✓
+- Duplicate idempotency key → "Duplicate purchase prevented" (no double charge) ✓
+- providerTimer: true for 5SIM (exact), false for Grizzly (estimated, honest) ✓
+- Provider masked in all customer responses ✓ · cancel = provider-first then local ✓
+- Balances restored (no money lost); guard tests 4/4; tsc=0; build OK.
+
+## Provider limitation (reported honestly, per spec)
+**Grizzly SMS exposes no session/expiration/cancel timer** via its handler_api (`getStatus`
+returns only WAIT/OK/CANCEL). Therefore "timer matches provider exactly" is IMPOSSIBLE for
+Grizzly — there is no provider timer to match. We show Grizzly time as "estimated" (from the
+admin session window) and flag it, rather than fabricate a value. 5SIM and SMSPool expose real
+timers and are shown exactly. Options to resolve for Grizzly: (a) accept estimated+labeled (current),
+(b) switch that pool's default to a provider with real timers, or (c) contact Grizzly for a
+timer-bearing endpoint.
+
+## Still open
+- Admin pool-management UI screen (endpoints ready: list/update/test; label/enable/hide/markup).
+- Optional explicit "Auto Route" mode + multi-offer compare view.

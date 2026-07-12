@@ -147,9 +147,13 @@ export async function getSms(providerSessionId, userId = null) {
   const st = String(r.json.status || "").toUpperCase();
   const smsArr = Array.isArray(r.json.sms) ? r.json.sms : [];
   const code = smsArr.length ? (smsArr[smsArr.length - 1].code || null) : null;
-  if (code) return { status: "completed", code };
-  if (st === "CANCELED" || st === "TIMEOUT" || st === "BANNED") return { status: "cancelled" };
-  return { status: "waiting" };
+  // Provider-truth timers (5SIM exposes ISO `expires` + `created_at`).
+  const expiresAt = r.json.expires || null;
+  const timeLeftSec = expiresAt ? Math.max(0, Math.round((new Date(expiresAt).getTime() - Date.now()) / 1000)) : null;
+  const meta = { expiresAt, timeLeftSec, createdAt: r.json.created_at || null };
+  if (code) return { status: "completed", code, ...meta };
+  if (st === "CANCELED" || st === "TIMEOUT" || st === "BANNED") return { status: "cancelled", ...meta };
+  return { status: "waiting", ...meta };
 }
 export async function getOrderStatus(providerSessionId, userId = null) { return getSms(providerSessionId, userId); }
 

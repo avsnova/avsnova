@@ -179,9 +179,13 @@ export async function getSms(providerSessionId, userId = null) {
   const r = await post("/sms/check", { orderid: providerSessionId }, { action: "getSms", userId });
   if (!r.json) return { status: "unknown", raw: r.text };
   const status = Number(r.json.status);
-  if ((status === 3 || r.json.sms) && r.json.sms) return { status: "completed", code: String(r.json.sms) };
-  if (status === 6 || status === 0) return { status: "cancelled" };
-  return { status: "waiting" };
+  // Provider-truth timers (SMSPool exposes unix `expiration` + live `time_left`).
+  const expiresAt = r.json.expiration ? new Date(Number(r.json.expiration) * 1000).toISOString() : null;
+  const timeLeftSec = r.json.time_left != null ? Math.max(0, Number(r.json.time_left)) : (expiresAt ? Math.max(0, Math.round((new Date(expiresAt).getTime() - Date.now()) / 1000)) : null);
+  const meta = { expiresAt, timeLeftSec };
+  if ((status === 3 || r.json.sms) && r.json.sms) return { status: "completed", code: String(r.json.sms), ...meta };
+  if (status === 6 || status === 0) return { status: "cancelled", ...meta };
+  return { status: "waiting", ...meta };
 }
 export async function getOrderStatus(providerSessionId, userId = null) { return getSms(providerSessionId, userId); }
 

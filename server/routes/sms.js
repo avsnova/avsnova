@@ -257,6 +257,11 @@ router.get('/numbers', async (req, res) => {
         const poll = await pollLineCode(r);
         const elapsed = Math.floor((Date.now() - new Date(r.created_at).getTime()) / 1000);
         const provLabel = (r.provider || "grizzly");
+        // Provider-truth expiry: persist the provider's real expiration when it exposes one
+        // (5SIM/SMSPool). Grizzly exposes none, so we leave expires_at null (UI shows Unavailable).
+        if (poll && poll.expiresAt && poll.expiresAt !== r.expires_at) {
+          try { await dbRun("UPDATE virtual_numbers SET expires_at = ? WHERE id = ?", [poll.expiresAt, r.id]); r.expires_at = poll.expiresAt; } catch (e) {}
+        }
 
         if (poll.status === "completed" && poll.code) {
           // Atomic transition: only the FIRST concurrent poll that flips 'active' → 'completed'
@@ -311,6 +316,9 @@ router.get('/numbers', async (req, res) => {
 
     const allRows = await dbAll("SELECT * FROM virtual_numbers WHERE user_id = ? ORDER BY created_at DESC", [req.user.id]);
     const serverNow = Date.now();
+    // Map provider -> masked pool label (customer must never see the real provider name).
+    let poolByProvider = {};
+    try { const pls = await dbAll("SELECT provider, label FROM sms_pools"); for (const p of pls) poolByProvider[p.provider] = p.label; } catch (e) {}
     res.json(allRows.map(r => {
       // Server-authoritative timing: compute remaining seconds & expiry here so the client
       // renders exactly what the server says (no client-side drift or fake countdowns).
@@ -329,13 +337,20 @@ router.get('/numbers', async (req, res) => {
       const CANCEL_LOCK = pricing.sms_cancel_delay || 120;
       const cancellable = r.status === "active" && !r.otp_received && elapsedSecs >= CANCEL_LOCK;
       const cancelInSecs = r.status === "active" && !r.otp_received ? Math.max(0, CANCEL_LOCK - elapsedSecs) : 0;
+      const prov = r.provider || "grizzly";
+      // providerTimer = true when the remaining time comes from the provider's OWN expiry
+      // (5SIM/SMSPool). false = provider exposes no timer (Grizzly) -> UI shows it as estimated.
+      const providerTimer = !!(providerExpiryMs && !isNaN(providerExpiryMs));
       return {
         id: r.id, number: r.number, country: r.country, flag: r.flag, service: r.service,
         status: r.status, cost: r.cost, otpReceived: r.otp_received || undefined, created_at: r.created_at,
-        provider: r.provider || "grizzly",
-        remaining,                          // seconds left (server-computed)
+        provider: prov,                     // internal only; UI should display poolLabel
+        poolLabel: poolByProvider[prov] || "Pool",  // masked customer-facing label
+        remaining,                          // seconds left
+        providerTimer,                      // true = exact provider timer; false = estimated (no provider timer)
         expires_at: new Date(expiresMs).toISOString(),
         server_now: new Date(serverNow).toISOString(),
+        last_sync: new Date(serverNow).toISOString(),  // this response IS a fresh provider sync
         cancellable,                        // provider allows cancel now
         cancel_in: cancelInSecs,            // seconds until cancel becomes available
       };

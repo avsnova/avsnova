@@ -7,6 +7,7 @@ import {
 import { Card, Button } from "../ui/shadcn";
 import { useToast } from "../ui/Toast";
 import { apiFetch } from "../../utils/api";
+import PoolBuyNumber from "./PoolBuyNumber";
 import { copyToClipboard, toLocalNumber } from "../../utils/clipboard";
 import { CountryFlag, ServiceLogo } from "../ui/BrandIcon";
 import { useBodyScrollLock } from "../../utils/useBodyScrollLock";
@@ -120,6 +121,15 @@ type PurchaseStage = "idle" | "searching" | "reserved" | "failed";
 export default function SMSPanelView({ walletBalance, onRefreshNumbers, onAddNotification }: SMSPanelViewProps) {
   const { toast } = useToast();
   const [balance, setBalance] = useState(walletBalance);
+  // Provider-independent "pools" mode: if an admin has enabled any customer-visible pool, use the
+  // new provider-based Buy Number experience. Otherwise fall back to the classic view (fully
+  // reversible — disabling all pools restores the old UI). Loading is null → brief neutral state.
+  const [poolsMode, setPoolsMode] = useState<null | boolean>(null);
+  useEffect(() => {
+    let alive = true;
+    apiFetch("/api/sms/pools").then((r) => { if (alive) setPoolsMode(!!(r && r.pools && r.pools.length > 0)); }).catch(() => { if (alive) setPoolsMode(false); });
+    return () => { alive = false; };
+  }, []);
 
   // Dynamic Catalog Paginated & Searchable States (Requirement 1, 2, 3!)
   const [countriesList, setCountriesList] = useState<any[]>([]);
@@ -654,6 +664,11 @@ export default function SMSPanelView({ walletBalance, onRefreshNumbers, onAddNot
   })();
   const historyTotalPages = Math.max(1, Math.ceil(filteredHistory.length / HISTORY_PAGE_SIZE));
   const pagedHistory = filteredHistory.slice((historyPage - 1) * HISTORY_PAGE_SIZE, historyPage * HISTORY_PAGE_SIZE);
+
+  // Provider-independent pools mode → render the new Buy Number experience.
+  if (poolsMode === true) {
+    return <PoolBuyNumber walletBalance={balance} onAddNotification={onAddNotification} />;
+  }
 
   return (
     <div className="space-y-6 font-inter relative text-left pb-4">
