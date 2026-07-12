@@ -88,14 +88,42 @@ async function completeLine(line) {
 // Intelligent classification (Requirement 12) mirrored for the SMS router.
 function classifyTransactionType(rawType) {
   const t = String(rawType || "").toLowerCase();
-  if (t.includes("deposit") || t.includes("fund")) return "DEPOSIT";
+  // Order matters: "refund"/"reversal" MUST be checked before "fund"/"deposit" because the
+  // substring "fund" is inside "re-fund" — otherwise refunds get mis-tagged as DEPOSIT (bug).
   if (t.includes("refund")) return "REFUND";
   if (t.includes("reversal")) return "REVERSAL";
+  if (t.includes("deposit") || t.includes("fund")) return "DEPOSIT";
   if (t.includes("adjust")) return "ADJUSTMENT";
   if (t.includes("revenue") || t.includes("profit")) return "REVENUE";
   if (t.includes("purchase") || t.includes("buy") || t.includes("order")) return "PURCHASE";
   if (t.includes("debit")) return "DEBIT";
   return t ? t.toUpperCase() : "DEBIT";
+}
+
+// ── Robust, idempotent SMS refund helper ──────────────────────────────────────────────────
+// Credits the wallet ATOMICALLY and records the refund transaction exactly once. Safe to call
+// more than once for the same order: the UNIQUE `reference` guard means a second call is a no-op
+// (no double refund). Returns { ok, already } — `already:true` means a prior refund existed.
+async function refundToWallet(userId, amountNgn, reference, description) {
+  if (!(amountNgn > 0)) return { ok: false, reason: "zero_amount" };
+  // 1) Idempotency: claim the refund by inserting the transaction row FIRST. The UNIQUE index on
+  //    `reference` makes a duplicate claim fail → we skip the wallet credit (never refund twice).
+  const txId = `TX-${Date.now().toString().slice(-6)}-${Math.floor(100 + Math.random() * 900)}`;
+  const now = new Date().toISOString();
+  try {
+    await dbRun(
+      "INSERT INTO transactions (id, user_id, reference, amount, status, type, category, description, profit, cost, created_at, updated_at) VALUES (?, ?, ?, ?, 'completed', 'REFUND', 'SMS Panel', ?, 0, 0, ?, ?)",
+      [txId, userId, reference, amountNgn, description || "SMS refund", now, now]
+    );
+  } catch (e) {
+    if (/UNIQUE|constraint/i.test(e.message || "")) return { ok: true, already: true }; // already refunded
+    throw e;
+  }
+  // 2) Atomic wallet credit (no read-then-write race).
+  await dbRun("UPDATE users SET wallet_balance = wallet_balance + ? WHERE id = ?", [amountNgn, userId]);
+  // 3) Admin audit log.
+  try { await smsAudit({ event: "refund", provider: "wallet", detail: `user=${userId} +₦${amountNgn} ref=${reference} — ${description || ""}`, userId }); } catch (e) {}
+  return { ok: true, already: false, txId };
 }
 
 async function logTransaction(userId, reference, amount, type, category, description, profit = 0, cost = 0, status = 'completed') {
@@ -310,17 +338,10 @@ router.get('/numbers', async (req, res) => {
           const upd = await dbRun("UPDATE virtual_numbers SET status = ? WHERE id = ? AND status = 'active'", [targetStatus, r.id]);
           const wonRace = upd && upd.changes > 0;
           if (wonRace) {
-            // Refund user on expiration
+            // Refund user on expiration (atomic + idempotent; correct amount, txn record, log).
             if (targetStatus === 'expired') {
-              const user = await dbGet("SELECT wallet_balance FROM users WHERE id = ?", [req.user.id]);
-              if (user) {
-                const newBalance = user.wallet_balance + r.cost;
-                await dbRun("UPDATE users SET wallet_balance = ? WHERE id = ?", [newBalance, req.user.id]);
-
-                const ref = `REF-EXP-${r.id}`;
-                await logTransaction(req.user.id, ref, r.cost, "refund", "SMS Panel", `Auto-refund for expired line: ${r.number}`);
-                await addNotification(req.user.id, "system", `Your SMS session ${r.id} expired without receiving SMS. ₦${r.cost.toLocaleString()} was refunded.`);
-              }
+              const rf = await refundToWallet(req.user.id, r.cost, `REF-EXP-${r.id}`, `Auto-refund for expired line: ${r.number}`);
+              if (rf.ok && !rf.already) await addNotification(req.user.id, "system", `Your SMS session ${r.id} expired without receiving SMS. ₦${r.cost.toLocaleString()} was refunded.`);
             }
             // The original purchase never completed → mark it cancelled so it never counts as revenue.
             try { await dbRun("UPDATE transactions SET status = 'cancelled', updated_at = ? WHERE reference = ? AND status = 'pending'", [new Date().toISOString(), `AVS-SMS-${r.id}`]); } catch (e) {}
@@ -625,16 +646,13 @@ router.post('/action/:numberId', async (req, res) => {
         // Someone else already transitioned this line (completed/expired/cancelled).
         return res.status(409).json({ error: "This line is no longer active and cannot be cancelled." });
       }
-      const user = await dbGet("SELECT wallet_balance FROM users WHERE id = ?", [req.user.id]);
-      const newBalance = user.wallet_balance + line.cost;
-      await dbRun("UPDATE users SET wallet_balance = ? WHERE id = ?", [newBalance, req.user.id]);
       await dbRun("UPDATE orders SET status = 'cancelled' WHERE id = ?", [numberId]);
       // Never counts as revenue — the purchase was cancelled before completion.
       try { await dbRun("UPDATE transactions SET status = 'cancelled', updated_at = ? WHERE reference = ? AND status = 'pending'", [new Date().toISOString(), `AVS-SMS-${numberId}`]); } catch (e) {}
 
-      const ref = `REF-SMS-${numberId}`;
-      await logTransaction(req.user.id, ref, line.cost, "refund", "SMS Panel", `Cancelled line: ${line.number}`);
-      await addNotification(req.user.id, "system", `Your SMS line activation ${numberId} was cancelled. ₦${line.cost.toLocaleString()} has been refunded.`);
+      // Atomic, idempotent refund (correct amount, transaction record, admin log, no double-refund).
+      const rf = await refundToWallet(req.user.id, line.cost, `REF-SMS-${numberId}`, `Cancelled line: ${line.number}`);
+      if (rf.ok && !rf.already) await addNotification(req.user.id, "system", `Your SMS line activation ${numberId} was cancelled. ₦${line.cost.toLocaleString()} has been refunded.`);
 
       return res.json({ success: true });
     } else if (action === 6) {
