@@ -70,6 +70,65 @@ export async function getCountries() { const r = await get("/country/retrieve_al
 export async function getServices() { const r = await get("/service/retrieve_all", { action: "getServices" }); return r.json || []; }
 export async function getPrices() { return {}; }
 
+// ——— NATIVE POOL METHODS (provider-independent architecture) ———
+// SMSPool's OWN native data, no cross-provider translation. Native country id = SMSPool numeric
+// country ID; native service id = SMSPool numeric service ID. `/request/pricing?country=ID`
+// returns per-country services with live price in ONE call (authoritative + self-consistent).
+
+// List SMSPool's own countries. Returns [{ id, name, prefix, iso }].
+export async function getNativeCountries() {
+  const r = await get("/country/retrieve_all", { action: "native_countries" });
+  const arr = Array.isArray(r.json) ? r.json : [];
+  return arr.map((c) => ({ id: String(c.ID), name: c.name, prefix: String(c.cc || "").replace("+", ""), iso: c.short_name || "" }))
+            .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+// List SMSPool's own services for one native country, with live price + stock.
+// Returns [{ id, name, price(USD), stock, successRate }].
+export async function getNativeServices(nativeCountry) {
+  if (nativeCountry == null || nativeCountry === "") return [];
+  const r = await post("/request/pricing", { country: nativeCountry }, { action: "native_services" });
+  const arr = Array.isArray(r.json) ? r.json : [];
+  const out = arr.map((s) => ({
+    id: String(s.service), name: s.service_name || String(s.service),
+    price: parseFloat(s.price) || 0,
+    // SMSPool /request/pricing lists only in-pool services; treat listed as available. Some
+    // responses include `available`/`amount` — surface it when present, else mark available.
+    stock: s.available != null ? Number(s.available) : (s.amount != null ? Number(s.amount) : 1),
+    successRate: s.success_rate != null ? Number(s.success_rate) : null,
+  })).filter((s) => s.price > 0);
+  out.sort((a, b) => a.name.localeCompare(b.name));
+  return out;
+}
+
+// Live price + stock for one native country+service. Returns { price(USD), stock, successRate } | null.
+export async function getNativePrice(nativeCountry, nativeService) {
+  const r = await post("/request/price", { country: nativeCountry, service: nativeService }, { action: "native_price" });
+  if (!r.json || r.json.price == null) return null;
+  const price = parseFloat(r.json.price);
+  if (!(price > 0)) return null;
+  return { price, stock: r.json.available != null ? Number(r.json.available) : 1, successRate: r.json.success_rate != null ? Number(r.json.success_rate) : null };
+}
+
+// Buy using SMSPool's OWN native numeric country+service IDs (no translation).
+// Returns { providerOrderId, number, expiresAt, priceUsd }.
+export async function buyNative(nativeCountry, nativeService, userId = null) {
+  const r = await post("/purchase/sms", { country: nativeCountry, service: nativeService }, { action: "native_buy", userId });
+  if (!r.json || r.json.success !== 1 || !r.json.order_id) {
+    const msg = (r.json && (r.json.message || r.json.error)) || r.text || "SMSPOOL_BUY_FAILED";
+    const e = new Error(msg);
+    if (/out of stock|no stock|no numbers|not available|no available/i.test(msg)) e.noStock = true;
+    throw e;
+  }
+  // `number` is full E.164 (with cc); `phonenumber` is stripped — always use full `number`.
+  let number = String(r.json.number || "");
+  if (!number && r.json.phonenumber) number = `${r.json.cc || ""}${r.json.phonenumber}`;
+  let expiresAt = null;
+  if (r.json.expiration) expiresAt = new Date(Number(r.json.expiration) * 1000).toISOString();
+  else if (r.json.expires_in) expiresAt = new Date(Date.now() + Number(r.json.expires_in) * 1000).toISOString();
+  return { providerOrderId: String(r.json.order_id), number, expiresAt, priceUsd: parseFloat(r.json.cost) || 0 };
+}
+
 // Price for canonical country+service. Returns { costUsd, count } or null if unmapped/unsupported.
 export async function getPrice(gCountry, gService) {
   const country = grizzlyToSmspoolCountry(gCountry);

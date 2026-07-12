@@ -272,6 +272,33 @@ export const initDb = async () => {
     try { await dbRun("INSERT INTO feature_flags (key, enabled, description, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(key) DO UPDATE SET description = excluded.description", [k, en, desc, new Date().toISOString()]); } catch (err) {}
   }
 
+  // SMS POOLS (provider-independent rebuild). Each pool = one real provider behind a neutral
+  // label the customer sees ("Pool 1"). Each pool loads ONLY its own provider's native catalog —
+  // catalogs are NEVER merged, so a country/service from one provider can never leak into another.
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS sms_pools (
+      id VARCHAR(32) PRIMARY KEY,
+      provider VARCHAR(32) NOT NULL,
+      label VARCHAR(64) NOT NULL,
+      enabled INTEGER DEFAULT 0,
+      hidden INTEGER DEFAULT 0,
+      sort_order INTEGER DEFAULT 0,
+      markup_type VARCHAR(16) DEFAULT 'flat',
+      markup_value REAL DEFAULT 1300,
+      updated_at VARCHAR(255)
+    )
+  `);
+  // Seed one pool per provider. Grizzly enabled by default (matches current behavior); the new
+  // providers start disabled until an admin enables + configures them.
+  const DEFAULT_POOLS = [
+    ["pool1", "grizzly", "Pool 1", 1, 1],
+    ["pool2", "smspool", "Pool 2", 0, 2],
+    ["pool3", "fivesim", "Pool 3", 0, 3],
+  ];
+  for (const [pid, prov, label, en, ord] of DEFAULT_POOLS) {
+    try { await dbRun("INSERT INTO sms_pools (id, provider, label, enabled, hidden, sort_order, markup_type, markup_value, updated_at) VALUES (?, ?, ?, ?, 0, ?, 'flat', 1300, ?) ON CONFLICT(id) DO NOTHING", [pid, prov, label, en, ord, new Date().toISOString()]); } catch (err) {}
+  }
+
   // 2A-e. Loss-prevention columns on virtual_numbers (§7). Idempotency + traceability so a
   // purchase can never double-charge and every order links wallet↔local↔provider. Additive.
   try { await dbRun("ALTER TABLE virtual_numbers ADD COLUMN transaction_ref VARCHAR(128)"); } catch (err) {}

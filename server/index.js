@@ -19,6 +19,7 @@ import * as tg from "./services/telegramService.js";
 import * as smsProviderRouter from "./services/sms/providerRouter.js";
 import * as smsHealth from "./services/sms/smsHealth.js";
 import * as featureFlags from "./services/featureFlags.js";
+import * as smsPools from "./services/sms/pools.js";
 
 // Load environment variables
 dotenv.config();
@@ -4642,6 +4643,105 @@ app.get("/api/admin/sms/route-plan", authenticateToken, async (req, res) => {
 // ——— Admin: unified Provider Overview Dashboard (SMS + SMM at a glance) ———
 // One call returns health for every SMS provider (from the routing engine's health table) and
 // every SMM provider (from api_balance_cache + sync_log). Read-only; safe to poll.
+// ════════════════════════════════════════════════════════════════════════════════════════════
+//  SMS POOLS — provider-independent rebuild. Customer sees neutral "Pool" labels; each pool
+//  loads ONLY its own provider's native catalog (no merging, no translation, no silent switch).
+//  FIRST RULE: never fabricate — every value comes from the provider API or we return an error.
+// ════════════════════════════════════════════════════════════════════════════════════════════
+
+// Customer: list the pools available to buy from (enabled + not hidden). Masked labels only.
+app.get("/api/sms/pools", authenticateToken, async (req, res) => {
+  try {
+    const rows = await smsPools.getCustomerPools();
+    // Never expose the real provider to the customer — only the neutral label.
+    res.json({ success: true, pools: rows.map((p) => ({ id: p.id, label: p.label })) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Customer: native countries for ONE pool (that provider's own list).
+app.get("/api/sms/pools/:poolId/countries", authenticateToken, async (req, res) => {
+  try {
+    const countries = await smsPools.poolCountries(req.params.poolId);
+    res.json({ success: true, countries });
+  } catch (err) {
+    const code = err.code || "PROVIDER_ERROR";
+    res.status(code === "POOL_UNAVAILABLE" ? 404 : 502).json({ error: code, message: "Could not load countries for this pool. Please try another pool or try again." });
+  }
+});
+
+// Customer: native services (with live price + stock) for ONE pool + that pool's native country id.
+app.get("/api/sms/pools/:poolId/services", authenticateToken, async (req, res) => {
+  const { country } = req.query;
+  if (!country) return res.status(400).json({ error: "country is required" });
+  try {
+    const services = await smsPools.poolServices(req.params.poolId, String(country));
+    res.json({ success: true, services });
+  } catch (err) {
+    res.status(502).json({ error: err.code || "PROVIDER_ERROR", message: "Could not load services for this pool/country." });
+  }
+});
+
+// Customer: live price for ONE pool + native country + native service.
+app.get("/api/sms/pools/:poolId/price", authenticateToken, async (req, res) => {
+  const { country, service } = req.query;
+  if (!country || !service) return res.status(400).json({ error: "country and service are required" });
+  try {
+    const price = await smsPools.poolPrice(req.params.poolId, String(country), String(service));
+    res.json({ success: true, ...price });
+  } catch (err) {
+    res.status(502).json({ error: err.code || "PRICE_UNAVAILABLE", message: "Live price is unavailable right now. Please try again." });
+  }
+});
+
+// ——— Admin: pool management ———
+app.get("/api/admin/sms/pools", authenticateToken, async (req, res) => {
+  if (!isUserAdmin(req.user)) return res.status(403).json({ error: "Access denied." });
+  try {
+    const pools = await smsPools.getAllPools();
+    // Admin CAN see the real provider behind each pool.
+    res.json({ success: true, pools });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post("/api/admin/sms/pools/:poolId", authenticateToken, async (req, res) => {
+  if (!isUserAdmin(req.user)) return res.status(403).json({ error: "Access denied." });
+  const b = req.body || {};
+  try {
+    const pool = await smsPools.getPool(req.params.poolId);
+    if (!pool) return res.status(404).json({ error: "Pool not found." });
+    const sets = [], p = [];
+    const set = (col, v) => { sets.push(`${col} = ?`); p.push(v); };
+    if (b.label !== undefined) set("label", String(b.label).slice(0, 64));
+    if (b.enabled !== undefined) set("enabled", b.enabled ? 1 : 0);
+    if (b.hidden !== undefined) set("hidden", b.hidden ? 1 : 0);
+    if (b.provider !== undefined && ["grizzly", "smspool", "fivesim"].includes(b.provider)) set("provider", b.provider);
+    if (b.markup_type !== undefined && ["flat", "percent"].includes(b.markup_type)) set("markup_type", b.markup_type);
+    if (b.markup_value !== undefined && !isNaN(parseFloat(b.markup_value))) set("markup_value", parseFloat(b.markup_value));
+    if (!sets.length) return res.json({ success: true, message: "No changes." });
+    set("updated_at", new Date().toISOString());
+    p.push(req.params.poolId);
+    await dbRun(`UPDATE sms_pools SET ${sets.join(", ")} WHERE id = ?`, p);
+    await logAuditAction(req.user.id, req.user.username || req.user.email, `Updated SMS pool ${req.params.poolId} (${sets.map(s => s.split(" =")[0]).join(",")})`, req.ip);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Admin: live balance + connectivity test for a pool's provider.
+app.post("/api/admin/sms/pools/:poolId/test", authenticateToken, async (req, res) => {
+  if (!isUserAdmin(req.user)) return res.status(403).json({ error: "Access denied." });
+  try {
+    const pool = await smsPools.getPool(req.params.poolId);
+    if (!pool) return res.status(404).json({ error: "Pool not found." });
+    const t0 = Date.now();
+    try {
+      const balance = await smsPools.poolBalance(pool);
+      res.json({ success: true, connected: true, balance, latencyMs: Date.now() - t0, provider: pool.provider });
+    } catch (e) {
+      res.json({ success: true, connected: false, error: e.message, latencyMs: Date.now() - t0, provider: pool.provider });
+    }
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // ——— Admin: Feature Flags (§19) — toggle major features without a redeploy ———
 app.get("/api/admin/feature-flags", authenticateToken, async (req, res) => {
   if (!isUserAdmin(req.user)) return res.status(403).json({ error: "Access denied." });

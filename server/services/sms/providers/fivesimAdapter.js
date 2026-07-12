@@ -43,6 +43,63 @@ export async function getBalance() {
 }
 
 export async function getCountries() { const r = await call("/guest/countries", { auth: false, action: "getCountries" }); return r.json || {}; }
+
+// ——— NATIVE POOL METHODS (provider-independent architecture) ———
+// These return 5SIM's OWN native data with NO cross-provider translation, so a pool can never
+// mix or mis-map another provider's country/service. Native country id = 5SIM slug; native
+// service id = 5SIM product slug.
+
+// List 5SIM's own countries. Returns [{ id(slug), name, prefix }].
+export async function getNativeCountries() {
+  const r = await call("/guest/countries", { auth: false, action: "native_countries" });
+  const d = r.json || {};
+  const out = [];
+  for (const [slug, node] of Object.entries(d)) {
+    if (!node || typeof node !== "object") continue;
+    const prefix = node.prefix ? Object.keys(node.prefix)[0] : "";
+    const iso = node.iso ? Object.keys(node.iso)[0] : "";
+    out.push({ id: slug, name: node.text_en || slug, prefix: (prefix || "").replace("+", ""), iso: (iso || "").toUpperCase() });
+  }
+  out.sort((a, b) => a.name.localeCompare(b.name));
+  return out;
+}
+
+// List 5SIM's own services (products) for one native country, with live price + stock.
+// Returns [{ id(product slug), name, price(USD), stock }].
+export async function getNativeServices(nativeCountry) {
+  if (!nativeCountry) return [];
+  const r = await call(`/guest/products/${encodeURIComponent(nativeCountry)}/any`, { auth: false, action: "native_services" });
+  const d = r.json || {};
+  const out = [];
+  for (const [slug, node] of Object.entries(d)) {
+    if (!node || typeof node !== "object") continue;
+    if (String(node.Category) !== "activation") continue; // only activation (not rentals/hosting)
+    const price = Number(node.Price) || 0, stock = Number(node.Qty) || 0;
+    out.push({ id: slug, name: slug, price, stock });
+  }
+  out.sort((a, b) => a.name.localeCompare(b.name));
+  return out;
+}
+
+// Live price + stock for one native country+service. Returns { price(USD), stock } | null.
+export async function getNativePrice(nativeCountry, nativeService) {
+  const svcs = await getNativeServices(nativeCountry);
+  const hit = svcs.find((s) => s.id === nativeService);
+  return hit ? { price: hit.price, stock: hit.stock } : null;
+}
+
+// Buy using 5SIM's OWN native country+service slugs (no translation).
+// Returns { providerOrderId, number, expiresAt, priceUsd, operator }.
+export async function buyNative(nativeCountry, nativeService, userId = null) {
+  const r = await call(`/user/buy/activation/${encodeURIComponent(nativeCountry)}/any/${encodeURIComponent(nativeService)}`, { action: "native_buy", userId });
+  if (!r.ok || !r.json || !r.json.id) {
+    const t = (r.text || "").toLowerCase();
+    const e = new Error(r.text || "5SIM_BUY_FAILED");
+    if (t.includes("no free phones") || t.includes("out of stock") || t.includes("not available")) e.noStock = true;
+    throw e;
+  }
+  return { providerOrderId: String(r.json.id), number: String(r.json.phone || ""), expiresAt: r.json.expires || null, priceUsd: Number(r.json.price) || 0, operator: r.json.operator || null };
+}
 export async function getServices() { return {}; }
 export async function getPrices() { return {}; }
 

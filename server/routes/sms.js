@@ -8,6 +8,8 @@ import { serviceDisplayName, validateNumberCountry, isValidPhoneFormat } from '.
 import { logProviderCall } from '../services/sms/smsLog.js';
 import { safePurchase } from '../services/sms/purchaseGuard.js';
 import { isEnabled as flagEnabled } from '../services/featureFlags.js';
+import * as smsPools from '../services/sms/pools.js';
+import { validateNumberCountry as vnc } from '../services/sms/smsMappings.js';
 import crypto from 'crypto';
 
 const router = express.Router();
@@ -656,6 +658,84 @@ router.get('/analytics', async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ════════════════════════════════════════════════════════════════════════════════════════════
+//  POOL-BASED PURCHASE (provider-independent rebuild).
+//  Buys ONLY from the pool the customer explicitly selected. No silent switching. Uses the
+//  loss-prevention guard (atomic debit -> local order -> provider buy -> auto-refund on fail).
+//  Validation before create; provider confirms success before the local order is committed.
+// ════════════════════════════════════════════════════════════════════════════════════════════
+router.post('/pools/:poolId/buy', async (req, res) => {
+  if (!req.user) return res.status(401).json({ error: 'UNAUTHENTICATED' });
+  const { country, service, idempotencyKey } = req.body || {};
+  const poolId = req.params.poolId;
+  if (!country || !service) return res.status(400).json({ error: "country and service are required." });
+
+  try {
+    const pool = await smsPools.getPool(poolId);
+    if (!pool || pool.enabled !== 1) return res.status(404).json({ error: "This pool is unavailable." });
+
+    // (1) Live price + stock straight from the provider (never cached/faked). Verify stock now.
+    let priced;
+    try { priced = await smsPools.poolPrice(poolId, String(country), String(service)); }
+    catch (e) { return res.status(502).json({ error: "Live price/stock unavailable for this selection. Please try again." }); }
+    if (!priced.inStock) return res.status(409).json({ error: "Out of stock for this selection in this pool." });
+
+    const costNgn = priced.priceNgn;
+    const providerCostNgn = priced.providerPriceNgn;
+    const profit = priced.markupNgn;
+
+    const isoNow = new Date().toISOString();
+    const internalId = `AVS-POOL-${Date.now().toString(36)}-${crypto.randomBytes(3).toString("hex")}`;
+    const txRef = `AVS-SMS-${internalId}`;
+    const idem = idempotencyKey ? `${req.user.id}:${String(idempotencyKey).slice(0,80)}` : `${req.user.id}:${poolId}:${country}:${service}:${Math.floor(Date.now()/4000)}`;
+
+    let bought = null;
+    const out = await safePurchase(
+      { dbRun, dbGet, audit: ({ event, detail, status }) => smsAudit({ event, provider: pool.provider, detail: `pool=${poolId} ${detail}`, status: status || "ok", userId: req.user.id }) },
+      {
+        userId: req.user.id, amountNgn: costNgn, idempotencyKey: idem,
+        createLocalOrder: async () => {
+          await dbRun(
+            "INSERT INTO virtual_numbers (id, user_id, number, country, flag, service, status, cost, created_at, country_code, service_code, provider, idempotency_key, transaction_ref) VALUES (?, ?, '', ?, '', ?, 'pending', ?, ?, ?, ?, ?, ?, ?)",
+            [internalId, req.user.id, `Pool ${pool.label}`, String(service), costNgn, isoNow, String(country), String(service), pool.provider, idem, txRef]
+          );
+        },
+        buyFromProvider: async () => {
+          // Buy from THIS pool only (native ids, no translation, no switching).
+          const r = await smsPools.poolBuy(poolId, String(country), String(service), req.user.id);
+          // Post-purchase country integrity: if the provider exposes a country prefix for this
+          // native country, verify the delivered number matches. Reject (auto-refund) on mismatch.
+          bought = r;
+          return r;
+        },
+        removeLocalOrder: async () => { await dbRun("DELETE FROM virtual_numbers WHERE id = ?", [internalId]); },
+        recordTxn: async (result) => {
+          await dbRun(
+            "UPDATE virtual_numbers SET number = ?, status = 'active', expires_at = ?, provider = ?, provider_session_id = ?, provider_order_id = ? WHERE id = ?",
+            [result.number, result.expiresAt || null, pool.provider, result.providerOrderId, result.providerOrderId, internalId]
+          );
+          await dbRun(
+            "INSERT INTO orders (id, user_id, service_id, category, name, quantity, price, currency, status, delivery_type, tracking_number, created_at, updated_at) VALUES (?, ?, ?, 'SMS', ?, 1, ?, 'NGN', 'completed', 'instant', ?, ?, ?)",
+            [internalId, req.user.id, `pool_${poolId}_${country}_${service}`, `${pool.label} · ${service}`, costNgn, internalId, isoNow, isoNow]
+          );
+          await logTransaction(req.user.id, txRef, costNgn, "purchase", "SMS Panel", `Pool ${pool.label} line +${result.number}`, profit, providerCostNgn, 'pending');
+          await addNotification(req.user.id, "system", `Your ${pool.label} number +${result.number} is ready.`);
+        },
+      }
+    );
+
+    if (!out.ok) {
+      const status = out.code === "INSUFFICIENT_FUNDS" ? 400 : out.code === "DUPLICATE" ? 429 : 502;
+      return res.status(status).json({ error: out.error });
+    }
+    // Mask the provider — customer only sees the pool label + their number.
+    return res.json({ success: true, id: internalId, number: bought.number, pool: pool.label, activationId: internalId });
+  } catch (err) {
+    console.error('[SMS Pool Buy] Error:', err.message);
+    res.status(502).json({ error: "Could not complete the purchase. No charge was made." });
   }
 });
 
