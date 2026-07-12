@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import {
   Search, Loader2, Clock, CheckCircle2, XCircle, Copy, RefreshCw, ShieldCheck,
-  Star, Server, AlertTriangle, Zap, Cpu, Globe2, Activity, ChevronRight, Wifi, WifiOff, Radio, Hash,
+  Star, Server, AlertTriangle, Zap, Cpu, Globe2, Activity, ChevronRight, ChevronDown, Wifi, WifiOff, Radio, Hash,
 } from "lucide-react";
 import { apiFetch } from "../../utils/api";
 import { copyToClipboard } from "../../utils/clipboard";
@@ -58,6 +58,8 @@ export default function PoolBuyNumber({ walletBalance = 0, onAddNotification }: 
   const [instructions, setInstructions] = useState<{ id: number; title: string; body: string }[]>([]);
   const [copiedKey, setCopiedKey] = useState<string>("");
   const buyLock = useRef(false);
+  // Dropdown open state (searchable dropdowns that auto-close on select / outside click).
+  const [openDrop, setOpenDrop] = useState<null | "country" | "service">(null);
 
   useEffect(() => { apiFetch("/api/sms/instructions").then((r) => setInstructions(r.instructions || [])).catch(() => {}); }, []);
 
@@ -232,57 +234,69 @@ export default function PoolBuyNumber({ walletBalance = 0, onAddNotification }: 
 
         {/* REGION + SERVICE — center */}
         <section className="lg:col-span-8 grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* REGION */}
+          {/* REGION (searchable dropdown, auto-closes on select) */}
           <div className="rounded-2xl border border-white/10 bg-[#0c0a1a]/80 backdrop-blur p-4 flex flex-col">
             <SectionTitle icon={<Globe2 className="h-4 w-4" />} label="Region" sub={pool ? pool.label : "Pick a node first"} />
-            {!pool ? <Locked text="Awaiting node selection" /> : countriesLoading ? <Skeletons n={6} /> : countriesError ? (
+            {!pool ? <Locked text="Awaiting node selection" /> : countriesLoading ? <Skeletons n={3} /> : countriesError ? (
               <Empty icon={<AlertTriangle className="h-7 w-7" />} title="Unavailable" hint={countriesError} action={<Ghost onClick={() => loadCountries(pool)}>Retry</Ghost>} />
             ) : (
-              <>
-                <HudSearch value={countryQ} onChange={setCountryQ} placeholder="Search regions…" />
-                <div className="mt-2 flex-1 max-h-[340px] overflow-auto pr-1 space-y-1.5 custom-scroll">
-                  {filteredCountries.length === 0 ? <Locked text="No matches" /> : filteredCountries.map((c) => {
-                    const sel = country?.id === c.id;
-                    return (
-                      <button key={c.id} onClick={() => setCountry(c)}
-                        className={`w-full flex items-center gap-2.5 rounded-lg border px-2.5 py-2 transition-all ${sel ? "border-cyan-400/50 bg-cyan-400/[0.08]" : "border-transparent bg-black/25 hover:border-white/15"} cursor-pointer`}>
-                        <span className="h-7 w-7 shrink-0 rounded-md bg-white/5 border border-white/10 flex items-center justify-center font-mono text-[10px] font-bold text-cyan-200/80">{glyph(c.name)}</span>
-                        <span className="text-sm text-white truncate flex-1 text-left">{c.name}</span>
-                        {c.prefix ? <span className="text-[10px] font-mono text-white/40">+{c.prefix}</span> : null}
-                        <Star onClick={(e) => { e.stopPropagation(); toggleFav("c", c.id); }} className={`h-3.5 w-3.5 shrink-0 ${isFav("c", c.id) ? "fill-amber-400 text-amber-400" : "text-white/25 hover:text-amber-300"}`} />
-                      </button>
-                    );
-                  })}
-                </div>
-              </>
+              <HudDropdown
+                open={openDrop === "country"}
+                onToggle={() => setOpenDrop((o) => (o === "country" ? null : "country"))}
+                onClose={() => setOpenDrop(null)}
+                placeholder="Select a region"
+                selectedLabel={country ? country.name : ""}
+                selectedMeta={country?.prefix ? `+${String(country.prefix).replace(/^\++/, "")}` : ""}
+                search={countryQ} onSearch={setCountryQ} searchPlaceholder="Search regions…"
+                empty={filteredCountries.length === 0}
+              >
+                {filteredCountries.map((c) => {
+                  const sel = country?.id === c.id;
+                  return (
+                    <button key={c.id} onClick={() => { setCountry(c); setOpenDrop(null); setCountryQ(""); }}
+                      className={`w-full flex items-center gap-2.5 rounded-lg border px-2.5 py-2 transition-all ${sel ? "border-cyan-400/50 bg-cyan-400/[0.08]" : "border-transparent bg-black/25 hover:border-white/15"} cursor-pointer`}>
+                      <span className="h-7 w-7 shrink-0 rounded-md bg-white/5 border border-white/10 flex items-center justify-center font-mono text-[10px] font-bold text-cyan-200/80">{glyph(c.name)}</span>
+                      <span className="text-sm text-white truncate flex-1 text-left">{c.name}</span>
+                      {c.prefix ? <span className="text-[10px] font-mono text-white/40">+{String(c.prefix).replace(/^\++/, "")}</span> : null}
+                      <Star onClick={(e) => { e.stopPropagation(); toggleFav("c", c.id); }} className={`h-3.5 w-3.5 shrink-0 ${isFav("c", c.id) ? "fill-amber-400 text-amber-400" : "text-white/25 hover:text-amber-300"}`} />
+                    </button>
+                  );
+                })}
+              </HudDropdown>
             )}
           </div>
 
-          {/* SERVICE */}
+          {/* SERVICE (searchable dropdown, auto-closes on select) */}
           <div className="rounded-2xl border border-white/10 bg-[#0c0a1a]/80 backdrop-blur p-4 flex flex-col">
             <SectionTitle icon={<Hash className="h-4 w-4" />} label="Service" sub={country ? country.name : "Pick a region first"} />
-            {!country ? <Locked text="Awaiting region selection" /> : servicesLoading ? <Skeletons n={6} /> : servicesError ? (
+            {!country ? <Locked text="Awaiting region selection" /> : servicesLoading ? <Skeletons n={3} /> : servicesError ? (
               <Empty icon={<AlertTriangle className="h-7 w-7" />} title="Unavailable" hint={servicesError} action={<Ghost onClick={() => loadServices(pool!, country)}>Retry</Ghost>} />
             ) : (
-              <>
-                <HudSearch value={serviceQ} onChange={setServiceQ} placeholder="Search services…" />
-                <div className="mt-2 flex-1 max-h-[340px] overflow-auto pr-1 space-y-1.5 custom-scroll">
-                  {filteredServices.length === 0 ? <Locked text="No matches" /> : filteredServices.map((s) => {
-                    const sel = service?.id === s.id;
-                    return (
-                      <button key={s.id} onClick={() => s.inStock && setService(s)} disabled={!s.inStock}
-                        className={`w-full flex items-center gap-2.5 rounded-lg border px-2.5 py-2 transition-all ${!s.inStock ? "opacity-40 cursor-not-allowed border-transparent" : sel ? "border-cyan-400/50 bg-cyan-400/[0.08] cursor-pointer" : "border-transparent bg-black/25 hover:border-white/15 cursor-pointer"}`}>
-                        <Star onClick={(e) => { e.stopPropagation(); toggleFav("s", s.id); }} className={`h-3.5 w-3.5 shrink-0 ${isFav("s", s.id) ? "fill-amber-400 text-amber-400" : "text-white/25 hover:text-amber-300"}`} />
-                        <span className="text-sm text-white truncate flex-1 text-left">{s.name}</span>
-                        {s.inStock
-                          ? <span className="text-[9px] font-mono text-emerald-300/80 flex items-center gap-1"><Activity className="h-2.5 w-2.5" />{s.stock > 900 ? "STK" : s.stock}</span>
-                          : <span className="text-[9px] font-mono text-red-300/70">EMPTY</span>}
-                        <span className="text-xs font-bold font-mono text-white w-[64px] text-right">{naira(s.priceNgn)}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </>
+              <HudDropdown
+                open={openDrop === "service"}
+                onToggle={() => setOpenDrop((o) => (o === "service" ? null : "service"))}
+                onClose={() => setOpenDrop(null)}
+                placeholder="Select a service"
+                selectedLabel={service ? service.name : ""}
+                selectedMeta={service ? naira(service.priceNgn) : ""}
+                search={serviceQ} onSearch={setServiceQ} searchPlaceholder="Search services…"
+                empty={filteredServices.length === 0}
+              >
+                {filteredServices.map((s) => {
+                  const sel = service?.id === s.id;
+                  return (
+                    <button key={s.id} onClick={() => { if (!s.inStock) return; setService(s); setOpenDrop(null); setServiceQ(""); }} disabled={!s.inStock}
+                      className={`w-full flex items-center gap-2.5 rounded-lg border px-2.5 py-2 transition-all ${!s.inStock ? "opacity-40 cursor-not-allowed border-transparent" : sel ? "border-cyan-400/50 bg-cyan-400/[0.08] cursor-pointer" : "border-transparent bg-black/25 hover:border-white/15 cursor-pointer"}`}>
+                      <Star onClick={(e) => { e.stopPropagation(); toggleFav("s", s.id); }} className={`h-3.5 w-3.5 shrink-0 ${isFav("s", s.id) ? "fill-amber-400 text-amber-400" : "text-white/25 hover:text-amber-300"}`} />
+                      <span className="text-sm text-white truncate flex-1 text-left">{s.name}</span>
+                      {s.inStock
+                        ? <span className="text-[9px] font-mono text-emerald-300/80 flex items-center gap-1"><Activity className="h-2.5 w-2.5" />{s.stock > 900 ? "STK" : s.stock}</span>
+                        : <span className="text-[9px] font-mono text-red-300/70">EMPTY</span>}
+                      <span className="text-xs font-bold font-mono text-white w-[64px] text-right">{naira(s.priceNgn)}</span>
+                    </button>
+                  );
+                })}
+              </HudDropdown>
             )}
           </div>
         </section>
@@ -407,12 +421,48 @@ function Meter({ label, value, tone }: { label: string; value: string; tone: "go
     </div>
   );
 }
-function HudSearch({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder: string }) {
+// Searchable dropdown: a collapsed trigger showing the current selection; tapping opens a panel
+// with a search box + scrollable options. Auto-closes on select (handled by the option onClick)
+// and on outside click / Escape. Prevents accidental scrolling & mis-taps.
+function HudDropdown({ open, onToggle, onClose, placeholder, selectedLabel, selectedMeta, search, onSearch, searchPlaceholder, empty, children }: {
+  open: boolean; onToggle: () => void; onClose: () => void; placeholder: string;
+  selectedLabel: string; selectedMeta?: string; search: string; onSearch: (v: string) => void;
+  searchPlaceholder: string; empty: boolean; children: React.ReactNode;
+}) {
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => { if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) onClose(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    setTimeout(() => inputRef.current?.focus(), 40);
+    return () => { document.removeEventListener("mousedown", onDoc); document.removeEventListener("keydown", onKey); };
+  }, [open, onClose]);
+
   return (
-    <div className="relative mt-3">
-      <Search className="h-3.5 w-3.5 text-white/30 absolute left-3 top-1/2 -translate-y-1/2" />
-      <input value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder}
-        className="w-full bg-black/40 border border-white/10 rounded-lg pl-9 pr-3 py-2 text-sm text-white placeholder:text-white/25 focus:outline-none focus:border-cyan-400/40 font-mono" />
+    <div ref={wrapRef} className="relative mt-3">
+      <button type="button" onClick={onToggle}
+        className={`w-full flex items-center justify-between gap-2 rounded-xl border px-3 py-2.5 text-left transition-all cursor-pointer ${open ? "border-cyan-400/50 bg-cyan-400/[0.06]" : "border-white/10 bg-black/40 hover:border-white/20"}`}>
+        <span className={`text-sm truncate ${selectedLabel ? "text-white font-medium" : "text-white/35 font-mono"}`}>{selectedLabel || placeholder}</span>
+        <span className="flex items-center gap-2 shrink-0">
+          {selectedMeta ? <span className="text-[10px] font-mono text-cyan-200/70">{selectedMeta}</span> : null}
+          <ChevronDown className={`h-4 w-4 text-white/40 transition-transform ${open ? "rotate-180 text-cyan-300" : ""}`} />
+        </span>
+      </button>
+      {open && (
+        <div className="absolute z-30 left-0 right-0 mt-1.5 rounded-xl border border-cyan-400/25 bg-[#0b0918] shadow-[0_12px_40px_rgba(0,0,0,0.6)] p-2 animate-[fadeIn_0.12s_ease]">
+          <div className="relative">
+            <Search className="h-3.5 w-3.5 text-white/30 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input ref={inputRef} value={search} onChange={(e) => onSearch(e.target.value)} placeholder={searchPlaceholder}
+              className="w-full bg-black/50 border border-white/10 rounded-lg pl-9 pr-3 py-2 text-sm text-white placeholder:text-white/25 focus:outline-none focus:border-cyan-400/40 font-mono" />
+          </div>
+          <div className="mt-2 max-h-[300px] overflow-auto pr-1 space-y-1.5 custom-scroll">
+            {empty ? <Locked text="No matches" /> : children}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
