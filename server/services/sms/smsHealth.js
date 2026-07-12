@@ -8,14 +8,20 @@
 import { dbRun, dbGet, dbAll } from "../../db.js";
 
 // In-memory latency ring + success/failure for fast health scoring (persisted snapshot in DB).
-const _mem = new Map(); // provider -> { latencies:[], ok:0, fail:0 }
-function mem(p) { if (!_mem.has(p)) _mem.set(p, { latencies: [], ok: 0, fail: 0 }); return _mem.get(p); }
+const _mem = new Map(); // provider -> { latencies:[], ok:0, fail:0, consecFail:0 }
+function mem(p) { if (!_mem.has(p)) _mem.set(p, { latencies: [], ok: 0, fail: 0, consecFail: 0 }); return _mem.get(p); }
+
+// A provider is only marked OFFLINE after this many CONSECUTIVE failures. A single blip (or a
+// customer-caused error like "insufficient balance") never sidelines a pool — one success resets it.
+const OFFLINE_AFTER_CONSEC_FAILS = 4;
 
 // Record the outcome of a real provider call. `ok` boolean, `latencyMs` number.
 export async function recordResult(provider, { ok, latencyMs = 0, error = null } = {}) {
   const m = mem(provider);
   if (latencyMs) { m.latencies.push(latencyMs); if (m.latencies.length > 50) m.latencies.shift(); }
-  if (ok) m.ok++; else m.fail++;
+  if (ok) { m.ok++; m.consecFail = 0; } else { m.fail++; m.consecFail++; }
+  // Online unless we've seen a sustained run of failures with no success in between.
+  const online = m.consecFail < OFFLINE_AFTER_CONSEC_FAILS ? 1 : 0;
   const now = new Date().toISOString();
   try {
     await dbRun(
@@ -27,7 +33,7 @@ export async function recordResult(provider, { ok, latencyMs = 0, error = null }
          last_error = CASE WHEN ? = 0 THEN ? ELSE last_error END,
          updated_at = ?
        WHERE provider = ?`,
-      [ok ? 1 : 0, Math.round(latencyMs) || 0, ok ? 1 : 0, ok ? 0 : 1, ok ? 1 : 0, now, ok ? 1 : 0, now, ok ? 1 : 0, (error || "").slice(0, 300), now, provider]
+      [online, Math.round(latencyMs) || 0, ok ? 1 : 0, ok ? 0 : 1, ok ? 1 : 0, now, ok ? 1 : 0, now, ok ? 1 : 0, (error || "").slice(0, 300), now, provider]
     );
   } catch (e) { /* health tracking must never break flow */ }
 }

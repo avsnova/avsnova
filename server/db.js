@@ -288,12 +288,12 @@ export const initDb = async () => {
       updated_at VARCHAR(255)
     )
   `);
-  // Seed one pool per provider. Grizzly enabled by default (matches current behavior); the new
-  // providers start disabled until an admin enables + configures them.
+  // Seed one pool per provider. No provider is special/protected: all three are ENABLED by
+  // default and equally toggleable from the admin panel (Grizzly can be turned OFF like any other).
   const DEFAULT_POOLS = [
     ["pool1", "grizzly", "Pool 1", 1, 1],
-    ["pool2", "smspool", "Pool 2", 0, 2],
-    ["pool3", "fivesim", "Pool 3", 0, 3],
+    ["pool2", "smspool", "Pool 2", 1, 2],
+    ["pool3", "fivesim", "Pool 3", 1, 3],
   ];
   for (const [pid, prov, label, en, ord] of DEFAULT_POOLS) {
     try { await dbRun("INSERT INTO sms_pools (id, provider, label, enabled, hidden, sort_order, markup_type, markup_value, updated_at) VALUES (?, ?, ?, ?, 0, ?, 'flat', 1300, ?) ON CONFLICT(id) DO NOTHING", [pid, prov, label, en, ord, new Date().toISOString()]); } catch (err) {}

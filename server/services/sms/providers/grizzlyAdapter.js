@@ -7,11 +7,39 @@
 import {
   getGrizzlyBalance, getCatalog, getLivePrice, allocateNumber, pollSmsCode, setActivationStatus,
 } from "../../grizzlySms.js";
+import { dbGet } from "../../../db.js";
 import { logProviderCall } from "../smsLog.js";
 import { serviceDisplayName } from "../serviceNames.js";
 
 export const id = "grizzly";
 export const label = "GrizzlySMS";
+
+// ——— Grizzly official service-name list (code -> real name) ———
+// Grizzly exposes ALL ~2400 service names via action=getServicesList. We cache it (6h) and use
+// it as the display-name source so customers never see raw 2-letter codes. Our central
+// serviceNames map still overrides the top brands for clean/consistent casing.
+let _svcNameCache = { map: null, at: 0 };
+const SVC_NAME_TTL = 6 * 60 * 60 * 1000;
+async function grizzlyServiceNameMap() {
+  if (_svcNameCache.map && Date.now() - _svcNameCache.at < SVC_NAME_TTL) return _svcNameCache.map;
+  const t0 = Date.now();
+  try {
+    let apiKey = process.env.GRIZZLY_SMS_API_KEY || "f502c10b7d5a89b00981b25d0631cc42";
+    let baseUrl = "https://api.grizzlysms.com/stubs/handler_api.php";
+    try { const row = await dbGet("SELECT grizzly_api_key, sms_api_url FROM settings LIMIT 1"); if (row) { if (row.grizzly_api_key) apiKey = row.grizzly_api_key; if (row.sms_api_url) baseUrl = row.sms_api_url; } } catch (e) {}
+    const url = `${baseUrl}?api_key=${encodeURIComponent(apiKey)}&action=getServicesList`;
+    const res = await fetch(url);
+    const data = await res.json();
+    const map = {};
+    for (const s of (data.services || [])) if (s && s.code) map[String(s.code)] = s.name || String(s.code);
+    _svcNameCache = { map, at: Date.now() };
+    await logProviderCall({ provider: id, action: "getServicesList", response: `${Object.keys(map).length} names`, latencyMs: Date.now() - t0 });
+    return map;
+  } catch (e) {
+    await logProviderCall({ provider: id, action: "getServicesList", response: e.message, status: "fail", latencyMs: Date.now() - t0 });
+    return _svcNameCache.map || {}; // fall back to last-good (or empty)
+  }
+}
 
 export async function getBalance() {
   const t0 = Date.now();
@@ -53,13 +81,16 @@ export async function getNativeCountries() {
 // List Grizzly's own services for one native country, with live price + stock — straight from
 // getPrices. Returns [{ id, name, price(USD), stock }].
 export async function getNativeServices(nativeCountry) {
-  const c = await getCatalog();
+  const [c, officialNames] = await Promise.all([getCatalog(), grizzlyServiceNameMap()]);
   const node = (c.prices || {})[String(nativeCountry)];
   if (!node || typeof node !== "object") return [];
   const out = [];
   for (const [code, v] of Object.entries(node)) {
     if (!v || v.cost === undefined) continue;
-    out.push({ id: code, name: serviceDisplayName(code, GRIZZLY_SERVICE_NAMES[code]), price: Number(v.cost) || 0, stock: Number(v.count) || 0 });
+    // Name priority: our central brand map (clean casing) -> Grizzly's official name -> our
+    // hardcoded fallback -> TitleCased code. Guarantees NO raw short code ever reaches the UI.
+    const providerName = officialNames[code] || GRIZZLY_SERVICE_NAMES[code];
+    out.push({ id: code, name: serviceDisplayName(code, providerName), price: Number(v.cost) || 0, stock: Number(v.count) || 0 });
   }
   out.sort((a, b) => a.name.localeCompare(b.name));
   return out;
