@@ -2365,6 +2365,20 @@ export const initDb = async () => {
     )
   `);
 
+  // SMS Panel instruction blocks — admin-managed content shown on the customer SMS page
+  // (purchase guidelines, refund policy, waiting info, etc.). Same shape as smm_instructions.
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS sms_instructions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title VARCHAR(255) DEFAULT '',
+      body TEXT DEFAULT '',
+      enabled INTEGER DEFAULT 1,
+      order_index INTEGER DEFAULT 0,
+      created_at VARCHAR(255),
+      updated_at VARCHAR(255)
+    )
+  `);
+
   // Referral / affiliate program: one row per (referrer → referred) relationship. Tracks the
   // lifecycle pending → qualified → rewarded so the inviter's bonus is paid exactly once.
   await dbRun(`

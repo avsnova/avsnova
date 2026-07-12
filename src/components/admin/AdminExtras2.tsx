@@ -159,6 +159,102 @@ export function SmmInstructionsPanel() {
 }
 
 /* ============================================================================
+ * SMS Panel Instructions — admin-managed blocks shown on the customer SMS page.
+ * Mirrors SmmInstructionsPanel (add/edit/enable/reorder/delete). Same proven pattern.
+ * ========================================================================== */
+export function SmsInstructionsPanel() {
+  const { toast } = useToast();
+  const confirm = useConfirm();
+  const [rows, setRows] = useState<any[]>([]);
+  const [form, setForm] = useState({ title: "", body: "" });
+  const [editing, setEditing] = useState<any | null>(null);
+
+  const load = useCallback(async () => {
+    try { const r = await apiFetch("/api/admin/sms/instructions"); setRows(r.instructions || []); } catch { /* silent */ }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const add = async () => {
+    if (!form.title.trim() && !form.body.trim()) { toast("Enter a title or body.", "warning"); return; }
+    try { await apiFetch("/api/admin/sms/instructions", { method: "POST", body: JSON.stringify({ ...form, order_index: rows.length }) }); toast("Instruction added.", "success"); setForm({ title: "", body: "" }); load(); }
+    catch (e: any) { toast("Failed: " + e.message, "error"); }
+  };
+  const saveEdit = async () => {
+    if (!editing) return;
+    try { await apiFetch(`/api/admin/sms/instructions/${editing.id}`, { method: "PUT", body: JSON.stringify({ title: editing.title, body: editing.body }) }); toast("Saved.", "success"); setEditing(null); load(); }
+    catch (e: any) { toast("Failed: " + e.message, "error"); }
+  };
+  const toggle = async (s: any) => {
+    try { await apiFetch(`/api/admin/sms/instructions/${s.id}`, { method: "PUT", body: JSON.stringify({ enabled: s.enabled ? 0 : 1 }) }); load(); }
+    catch (e: any) { toast("Failed: " + e.message, "error"); }
+  };
+  const del = async (id: number) => {
+    const ok = await confirm({ title: "Delete instruction?", message: "This will remove it from the SMS panel.", confirmLabel: "Delete", danger: true });
+    if (!ok) return;
+    try { await apiFetch(`/api/admin/sms/instructions/${id}`, { method: "DELETE" }); load(); }
+    catch (e: any) { toast("Failed: " + e.message, "error"); }
+  };
+  const move = async (idx: number, dir: -1 | 1) => {
+    const next = [...rows]; const j = idx + dir;
+    if (j < 0 || j >= next.length) return;
+    [next[idx], next[j]] = [next[j], next[idx]];
+    setRows(next);
+    try { for (let i = 0; i < next.length; i++) await apiFetch(`/api/admin/sms/instructions/${next[i].id}`, { method: "PUT", body: JSON.stringify({ order_index: i }) }); }
+    catch { load(); }
+  };
+
+  const inputCls = "w-full bg-black/40 border border-purple-500/20 text-xs text-white px-3 py-2 rounded-xl focus:outline-none";
+  return (
+    <Card className="space-y-4">
+      <div>
+        <h3 className="text-base font-bold text-white font-space">SMS Panel Instructions</h3>
+        <p className="text-xs text-purple-200/50 mt-0.5">These blocks appear automatically on the customer SMS (Buy Number) page — purchase guidelines, refund policy, waiting info, notices. Create, edit, reorder, enable/disable — no code needed.</p>
+      </div>
+      <div className="space-y-2 p-3 rounded-xl border border-purple-500/10 bg-black/20">
+        <Input label="Title" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="e.g. Refund Policy" />
+        <div className="space-y-1">
+          <label className="text-xs font-bold text-purple-200/70 font-space">Body</label>
+          <textarea value={form.body} onChange={(e) => setForm({ ...form, body: e.target.value })} rows={3} placeholder="Instruction text shown to customers…" className={inputCls} />
+        </div>
+        <Button onClick={add} className="flex items-center gap-1"><Plus className="h-3.5 w-3.5" /> Add Instruction</Button>
+      </div>
+      {rows.length === 0 ? <div className="py-6 text-center text-purple-200/30 italic text-xs">No instructions yet.</div> : (
+        <div className="space-y-2">
+          {rows.map((s, idx) => (
+            <div key={s.id} className="p-3 rounded-xl bg-black/30 border border-purple-500/10">
+              {editing && editing.id === s.id ? (
+                <div className="space-y-2">
+                  <Input label="Title" value={editing.title} onChange={(e) => setEditing({ ...editing, title: e.target.value })} />
+                  <textarea value={editing.body} onChange={(e) => setEditing({ ...editing, body: e.target.value })} rows={3} className={inputCls} />
+                  <div className="flex gap-2">
+                    <Button size="sm" onClick={saveEdit} className="flex items-center gap-1"><Save className="h-3.5 w-3.5" /> Save</Button>
+                    <Button size="sm" variant="secondary" onClick={() => setEditing(null)} className="flex items-center gap-1"><X className="h-3.5 w-3.5" /> Cancel</Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-bold text-white">{s.title || "(untitled)"}</div>
+                    <div className="text-[11px] text-purple-200/60 whitespace-pre-wrap mt-0.5">{s.body}</div>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button onClick={() => move(idx, -1)} className="p-1.5 rounded-lg bg-black/40 text-purple-200/60 hover:text-white cursor-pointer"><ChevronUp className="h-3.5 w-3.5" /></button>
+                    <button onClick={() => move(idx, 1)} className="p-1.5 rounded-lg bg-black/40 text-purple-200/60 hover:text-white cursor-pointer"><ChevronDown className="h-3.5 w-3.5" /></button>
+                    <button onClick={() => toggle(s)} className={`px-2.5 py-1 rounded-lg text-[11px] font-bold cursor-pointer ${s.enabled ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/30" : "bg-black/40 text-purple-300/50 border border-purple-500/20"}`}>{s.enabled ? "ON" : "OFF"}</button>
+                    <button onClick={() => setEditing({ id: s.id, title: s.title, body: s.body })} className="p-1.5 rounded-lg bg-black/40 text-cyan-300 cursor-pointer"><Edit className="h-3.5 w-3.5" /></button>
+                    <button onClick={() => del(s.id)} className="p-1.5 rounded-lg bg-red-500/10 text-red-300 cursor-pointer"><Trash2 className="h-3.5 w-3.5" /></button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/* ============================================================================
  * Item 2 — Dynamic Checkout Fields (per module)
  * ========================================================================== */
 const CHECKOUT_MODULES = [

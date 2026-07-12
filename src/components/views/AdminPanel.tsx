@@ -33,7 +33,7 @@ import FormBuilder from "../admin/FormBuilder";
 import DocsManager from "../admin/DocsManager";
 import ModuleProductsManager from "../admin/ModuleProductsManager";
 import { RefundsPanel, ReportsPanel, FeedbackPanel, CustomSettingsPanel } from "../admin/AdminExtras";
-import { SettingsRollbackPanel, SmmInstructionsPanel, CheckoutFieldsPanel, SmmSyncHealthPanel, ReferralAdminPanel, TelegramAdminPanel } from "../admin/AdminExtras2";
+import { SettingsRollbackPanel, SmmInstructionsPanel, SmsInstructionsPanel, CheckoutFieldsPanel, SmmSyncHealthPanel, ReferralAdminPanel, TelegramAdminPanel } from "../admin/AdminExtras2";
 import OrderDetailsModal from "../admin/OrderDetailsModal";
 import CustomFulfillFields from "../admin/CustomFulfillFields";
 import MarketplaceCredentialPicker from "../admin/MarketplaceCredentialPicker";
@@ -281,6 +281,7 @@ const ADMIN_NAV_SECTIONS: AdminNavSection[] = [
       { label: "API Keys & Gateways", tab: "settings" },
       { label: "Checkout Fields", tab: "checkout_fields" },
       { label: "SMM Instructions", tab: "smm_instructions" },
+      { label: "SMS Instructions", tab: "sms_instructions" },
       { label: "SMM Sync Health", tab: "smm_sync" },
       { label: "Telegram Bot", tab: "telegram" },
       { label: "Settings Rollback", tab: "settings_rollback" },
@@ -4045,6 +4046,7 @@ export default function AdminPanel() {
       {activeTab === "feedback" && <div className="font-inter"><FeedbackPanel /></div>}
       {activeTab === "checkout_fields" && <div className="font-inter"><CheckoutFieldsPanel /></div>}
       {activeTab === "smm_instructions" && <div className="font-inter"><SmmInstructionsPanel /></div>}
+      {activeTab === "sms_instructions" && <div className="font-inter"><SmsInstructionsPanel /></div>}
       {activeTab === "smm_sync" && <div className="font-inter"><SmmSyncHealthPanel /></div>}
       {activeTab === "telegram" && <div className="font-inter"><TelegramAdminPanel /></div>}
       {activeTab === "settings_rollback" && <div className="font-inter"><SettingsRollbackPanel /></div>}

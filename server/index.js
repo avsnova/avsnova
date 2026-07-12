@@ -11015,6 +11015,65 @@ app.delete("/api/admin/smm/instructions/:id", authenticateToken, async (req, res
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ——— SMS Panel instructions (admin-managed blocks shown on the customer SMS page) ———
+// Public: enabled blocks only, in display order.
+app.get("/api/sms/instructions", async (req, res) => {
+  try {
+    const rows = await dbAll("SELECT id, title, body FROM sms_instructions WHERE enabled = 1 ORDER BY order_index ASC, id ASC");
+    res.json({ success: true, instructions: rows });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+// Admin: full list (incl. disabled).
+app.get("/api/admin/sms/instructions", authenticateToken, async (req, res) => {
+  if (!isUserAdmin(req.user)) return res.status(403).json({ error: "Access denied." });
+  try {
+    const rows = await dbAll("SELECT * FROM sms_instructions ORDER BY order_index ASC, id ASC");
+    res.json({ success: true, instructions: rows });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+app.post("/api/admin/sms/instructions", authenticateToken, async (req, res) => {
+  if (!isUserAdmin(req.user)) return res.status(403).json({ error: "Access denied." });
+  const b = req.body || {};
+  if (!b.title && !b.body) return res.status(400).json({ error: "Title or body is required." });
+  try {
+    const now = new Date().toISOString();
+    const r = await dbRun(
+      "INSERT INTO sms_instructions (title, body, enabled, order_index, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+      [b.title || "", b.body || "", b.enabled === false ? 0 : 1, parseInt(b.order_index) || 0, now, now]
+    );
+    await logAuditAction(req.user.id, req.user.username, `Created SMS instruction "${b.title || ""}"`, req.ip);
+    res.json({ success: true, id: r && r.lastID });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+app.put("/api/admin/sms/instructions/:id", authenticateToken, async (req, res) => {
+  if (!isUserAdmin(req.user)) return res.status(403).json({ error: "Access denied." });
+  const b = req.body || {};
+  try {
+    const ex = await dbGet("SELECT * FROM sms_instructions WHERE id = ?", [req.params.id]);
+    if (!ex) return res.status(404).json({ error: "Instruction not found." });
+    await dbRun(
+      "UPDATE sms_instructions SET title = ?, body = ?, enabled = ?, order_index = ?, updated_at = ? WHERE id = ?",
+      [
+        b.title !== undefined ? b.title : ex.title,
+        b.body !== undefined ? b.body : ex.body,
+        b.enabled !== undefined ? (b.enabled ? 1 : 0) : ex.enabled,
+        b.order_index !== undefined ? parseInt(b.order_index) : ex.order_index,
+        new Date().toISOString(),
+        req.params.id,
+      ]
+    );
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+app.delete("/api/admin/sms/instructions/:id", authenticateToken, async (req, res) => {
+  if (!isUserAdmin(req.user)) return res.status(403).json({ error: "Access denied." });
+  try {
+    await dbRun("DELETE FROM sms_instructions WHERE id = ?", [req.params.id]);
+    await logAuditAction(req.user.id, req.user.username, `Deleted SMS instruction #${req.params.id}`, req.ip);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // ============================================================================
 //  ITEM 2 — DYNAMIC CHECKOUT FIELDS (admin-managed per module; no code changes)
 // ============================================================================

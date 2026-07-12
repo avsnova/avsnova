@@ -69,7 +69,13 @@ export default function PoolBuyNumber({ walletBalance = 0, onAddNotification }: 
   const [fav, setFav] = useState<Record<string, string[]>>(loadFav());
 
   const [active, setActive] = useState<ActiveLine[]>([]);
+  const [instructions, setInstructions] = useState<{ id: number; title: string; body: string }[]>([]);
   const buyLock = useRef(false);
+
+  // Admin-managed SMS panel instructions (purchase guidelines, refund policy, etc.).
+  useEffect(() => {
+    apiFetch("/api/sms/instructions").then((r) => setInstructions(r.instructions || [])).catch(() => {});
+  }, []);
 
   // ── Load pools ──
   useEffect(() => {
@@ -379,6 +385,21 @@ export default function PoolBuyNumber({ walletBalance = 0, onAddNotification }: 
           </div>
         )}
       </div>
+
+      {/* Admin-managed instructions (purchase guidelines, refund policy, notices, etc.) */}
+      {instructions.length > 0 && (
+        <div className="rounded-2xl bg-[#150c2e] border border-purple-500/15 p-4">
+          <h3 className="text-sm font-bold text-white flex items-center gap-2 mb-3"><ShieldCheck className="h-4 w-4 text-cyan-400" /> Good to know</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {instructions.map((ins) => (
+              <div key={ins.id} className="rounded-xl bg-black/20 border border-purple-500/10 p-3.5">
+                {ins.title ? <div className="text-[13px] font-bold text-white mb-1">{ins.title}</div> : null}
+                <div className="text-[11.5px] text-purple-200/70 leading-relaxed whitespace-pre-wrap">{ins.body}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
