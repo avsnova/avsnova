@@ -8,6 +8,7 @@ import {
   getGrizzlyBalance, getCatalog, getLivePrice, allocateNumber, pollSmsCode, setActivationStatus,
 } from "../../grizzlySms.js";
 import { logProviderCall } from "../smsLog.js";
+import { serviceDisplayName } from "../serviceNames.js";
 
 export const id = "grizzly";
 export const label = "GrizzlySMS";
@@ -58,7 +59,7 @@ export async function getNativeServices(nativeCountry) {
   const out = [];
   for (const [code, v] of Object.entries(node)) {
     if (!v || v.cost === undefined) continue;
-    out.push({ id: code, name: GRIZZLY_SERVICE_NAMES[code] || code.toUpperCase(), price: Number(v.cost) || 0, stock: Number(v.count) || 0 });
+    out.push({ id: code, name: serviceDisplayName(code, GRIZZLY_SERVICE_NAMES[code]), price: Number(v.cost) || 0, stock: Number(v.count) || 0 });
   }
   out.sort((a, b) => a.name.localeCompare(b.name));
   return out;

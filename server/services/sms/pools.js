@@ -15,6 +15,7 @@ import { dbAll, dbGet } from "../../db.js";
 import * as grizzly from "./providers/grizzlyAdapter.js";
 import * as fivesim from "./providers/fivesimAdapter.js";
 import * as smspool from "./providers/smspoolAdapter.js";
+import * as health from "./smsHealth.js";
 
 const ADAPTERS = { grizzly, fivesim, smspool };
 
@@ -50,6 +51,27 @@ export async function getPool(poolId) {
 function adapterFor(pool) {
   if (!pool) return null;
   return ADAPTERS[pool.provider] || null;
+}
+
+// Minimum real API calls before we trust/show a success rate (avoid misleading "100%" on a
+// provider with no history). Below this we return null → UI shows "New" (never a fabricated %).
+const SUCCESS_RATE_MIN_SAMPLE = 20;
+
+// Customer-facing summary card for one pool: online status, availability, success rate (or null),
+// and average latency. Never exposes the real provider. Balance/errors stay admin-only.
+export async function poolSummary(pool) {
+  const h = await health.getHealth(pool.provider).catch(() => null);
+  const sr = await health.successRate(pool.provider).catch(() => ({ rate: 1, ok: 0, fail: 0 }));
+  const sample = (sr.ok || 0) + (sr.fail || 0);
+  const online = !h || h.online !== 0;
+  return {
+    id: pool.id,
+    label: pool.label,
+    online,
+    // Real success rate only when we have enough samples; otherwise null (UI shows "New").
+    successRate: sample >= SUCCESS_RATE_MIN_SAMPLE ? Math.round(sr.rate * 100) : null,
+    latencyMs: h && h.last_latency_ms ? h.last_latency_ms : null,
+  };
 }
 
 // ——— Catalog (native, per-pool) ———

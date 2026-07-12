@@ -6,6 +6,7 @@
 import { dbGet } from "../../../db.js";
 import { logProviderCall } from "../smsLog.js";
 import { grizzlyToFivesimCountry, grizzlyToFivesimService } from "../smsMappings.js";
+import { serviceDisplayName } from "../serviceNames.js";
 
 export const id = "fivesim";
 export const label = "5SIM";
@@ -75,7 +76,8 @@ export async function getNativeServices(nativeCountry) {
     if (!node || typeof node !== "object") continue;
     if (String(node.Category) !== "activation") continue; // only activation (not rentals/hosting)
     const price = Number(node.Price) || 0, stock = Number(node.Qty) || 0;
-    out.push({ id: slug, name: slug, price, stock });
+    // Customer-facing full name (never the raw 5SIM slug like "whatsapp"/"go").
+    out.push({ id: slug, name: serviceDisplayName(slug), price, stock });
   }
   out.sort((a, b) => a.name.localeCompare(b.name));
   return out;

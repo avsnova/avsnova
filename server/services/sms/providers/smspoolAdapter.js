@@ -7,6 +7,7 @@
 import { dbGet } from "../../../db.js";
 import { logProviderCall } from "../smsLog.js";
 import { grizzlyToSmspoolCountry, grizzlyToSmspoolService } from "../smsMappings.js";
+import { serviceDisplayName } from "../serviceNames.js";
 
 export const id = "smspool";
 export const label = "SMSPool";
@@ -90,7 +91,7 @@ export async function getNativeServices(nativeCountry) {
   const r = await post("/request/pricing", { country: nativeCountry }, { action: "native_services" });
   const arr = Array.isArray(r.json) ? r.json : [];
   const out = arr.map((s) => ({
-    id: String(s.service), name: s.service_name || String(s.service),
+    id: String(s.service), name: serviceDisplayName(s.service_name, s.service_name),
     price: parseFloat(s.price) || 0,
     // SMSPool /request/pricing lists only in-pool services; treat listed as available. Some
     // responses include `available`/`amount` — surface it when present, else mark available.

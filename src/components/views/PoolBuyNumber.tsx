@@ -4,6 +4,7 @@ import {
   ChevronRight, Star, Server, AlertTriangle, PhoneCall, Inbox, X,
 } from "lucide-react";
 import { apiFetch } from "../../utils/api";
+import { copyToClipboard } from "../../utils/clipboard";
 import { useToast } from "../ui/Toast";
 import { useConfirm } from "../ui/ConfirmDialog";
 
@@ -15,9 +16,9 @@ import { useConfirm } from "../ui/ConfirmDialog";
  * Backed by /api/sms/pools/* and /api/sms/numbers. Self-contained; safe to render standalone.
  */
 
-type Pool = { id: string; label: string };
+type Pool = { id: string; label: string; online?: boolean; successRate?: number | null; latencyMs?: number | null };
 type Country = { id: string; name: string; prefix?: string; iso?: string };
-type Service = { id: string; name: string; stock: number; inStock: boolean; providerPriceNgn: number; markupNgn: number; priceNgn: number; successRate?: number | null };
+type Service = { id: string; name: string; stock: number; inStock: boolean; priceNgn: number; successRate?: number | null };
 type ActiveLine = {
   id: string; number: string; country: string; flag?: string; service: string; status: string;
   otpReceived?: string; created_at: string; poolLabel?: string; provider?: string; remaining: number;
@@ -155,7 +156,7 @@ export default function PoolBuyNumber({ walletBalance = 0, onAddNotification }: 
 
     const ok = await confirm({
       title: "Confirm purchase",
-      message: `Pool: ${pool.label}\nService: ${service.name}\nCountry: ${country.name}\n\nProvider price: ${naira(service.providerPriceNgn)}\nMarkup: ${naira(service.markupNgn)}\nYou pay: ${naira(service.priceNgn)}\n\nA number will be reserved from ${pool.label}. Continue?`,
+      message: `Pool: ${pool.label}\nService: ${service.name}\nCountry: ${country.name}\n\nPrice: ${naira(service.priceNgn)}\n\nA number will be reserved from ${pool.label}. Continue?`,
       confirmLabel: `Pay ${naira(service.priceNgn)}`,
       cancelLabel: "Cancel",
     });
@@ -189,7 +190,14 @@ export default function PoolBuyNumber({ walletBalance = 0, onAddNotification }: 
     } catch (e: any) { toast(e.message || "The provider could not cancel this yet.", "warning"); }
   };
 
-  const copy = (t: string) => { navigator.clipboard?.writeText(t).then(() => toast("Copied", "success")).catch(() => {}); };
+  // Robust copy: uses the platform clipboard util (async API + iOS/Android execCommand fallback)
+  // so it works on desktop, iPhone and Android, and reports failure gracefully.
+  const [copiedKey, setCopiedKey] = useState<string>("");
+  const copy = async (t: string, key: string) => {
+    const ok = await copyToClipboard(String(t ?? ""));
+    if (ok) { setCopiedKey(key); toast("Copied", "success"); setTimeout(() => setCopiedKey((k) => (k === key ? "" : k)), 1600); }
+    else { toast("Couldn't copy automatically — long-press the number to copy.", "warning"); }
+  };
 
   // ═══════════════════ RENDER ═══════════════════
   return (
@@ -216,13 +224,26 @@ export default function PoolBuyNumber({ walletBalance = 0, onAddNotification }: 
             <EmptyState icon={<Server className="h-8 w-8" />} title="No pools available" hint="An administrator needs to enable at least one pool." />
           ) : (
             <div className="space-y-2 mt-3">
-              {pools.map((p) => (
-                <button key={p.id} onClick={() => setPool(p)}
-                  className={`w-full flex items-center justify-between px-3.5 py-3 rounded-xl border cursor-pointer transition-all ${pool?.id === p.id ? "bg-cyan-500/15 border-cyan-500/40 text-white" : "bg-black/20 border-purple-500/10 text-purple-100 hover:border-purple-400/30"}`}>
-                  <span className="flex items-center gap-2.5 font-bold text-sm"><Server className="h-4 w-4 text-cyan-400" />{p.label}</span>
-                  <ChevronRight className="h-4 w-4 opacity-50" />
-                </button>
-              ))}
+              {pools.map((p) => {
+                const offline = p.online === false;
+                const selected = pool?.id === p.id;
+                return (
+                  <button key={p.id} onClick={() => !offline && setPool(p)} disabled={offline}
+                    className={`w-full text-left px-3.5 py-3 rounded-xl border transition-all ${offline ? "opacity-50 cursor-not-allowed border-purple-500/10 bg-black/10" : selected ? "bg-cyan-500/15 border-cyan-500/50 ring-1 ring-cyan-500/40 cursor-pointer" : "bg-black/20 border-purple-500/10 hover:border-purple-400/30 cursor-pointer"}`}>
+                    <div className="flex items-center justify-between">
+                      <span className="flex items-center gap-2.5 font-bold text-sm text-white"><Server className="h-4 w-4 text-cyan-400" />{p.label}</span>
+                      {selected ? <CheckCircle2 className="h-4 w-4 text-cyan-400" /> : <ChevronRight className="h-4 w-4 opacity-40" />}
+                    </div>
+                    <div className="flex items-center gap-3 mt-1.5 text-[10.5px]">
+                      <span className={`flex items-center gap-1 font-bold ${offline ? "text-red-300" : "text-emerald-300"}`}>
+                        <span className={`h-1.5 w-1.5 rounded-full ${offline ? "bg-red-400" : "bg-emerald-400"}`} />{offline ? "Offline" : "Available"}
+                      </span>
+                      {p.successRate != null ? <span className="text-purple-200/70">Success {p.successRate}%</span> : <span className="text-purple-300/40">New</span>}
+                      {p.latencyMs ? <span className="text-purple-300/40 flex items-center gap-1"><Signal className="h-3 w-3" />{p.latencyMs}ms</span> : null}
+                    </div>
+                  </button>
+                );
+              })}
             </div>
           )}
         </div>
@@ -286,7 +307,7 @@ export default function PoolBuyNumber({ walletBalance = 0, onAddNotification }: 
         <div className="rounded-2xl bg-gradient-to-r from-cyan-500/10 to-purple-500/10 border border-cyan-500/25 p-4 flex items-center justify-between flex-wrap gap-3 animate-[fadeIn_0.2s_ease]">
           <div className="text-sm">
             <div className="text-white font-bold flex items-center gap-2"><ShieldCheck className="h-4 w-4 text-emerald-400" />{pool.label} · {country.name} · {service.name}</div>
-            <div className="text-[11px] text-purple-200/60 mt-0.5">Provider {naira(service.providerPriceNgn)} + markup {naira(service.markupNgn)} = <span className="text-white font-bold">{naira(service.priceNgn)}</span></div>
+            <div className="text-[11px] text-purple-200/60 mt-0.5">Total price: <span className="text-white font-bold">{naira(service.priceNgn)}</span></div>
           </div>
           <button onClick={doBuy} disabled={buying || !service.inStock}
             className="px-5 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-black font-bold text-sm cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-2 min-w-[150px] justify-center">
@@ -316,7 +337,9 @@ export default function PoolBuyNumber({ walletBalance = 0, onAddNotification }: 
                     <div className="flex items-center gap-2.5 min-w-0">
                       <span className="px-2 py-0.5 rounded-md bg-purple-500/15 text-purple-200 text-[10px] font-bold shrink-0">{l.poolLabel || "Pool"}</span>
                       <span className="text-white font-mono font-bold text-sm truncate">+{l.number}</span>
-                      <button onClick={() => copy(l.number)} className="text-purple-300/50 hover:text-white cursor-pointer shrink-0"><Copy className="h-3.5 w-3.5" /></button>
+                      <button onClick={() => copy(l.number, "num-" + l.id)} title="Copy number" className="text-purple-300/50 hover:text-white cursor-pointer shrink-0">
+                        {copiedKey === "num-" + l.id ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
+                      </button>
                     </div>
                     <StatusBadge status={l.status} otp={l.otpReceived} />
                   </div>
@@ -332,7 +355,9 @@ export default function PoolBuyNumber({ walletBalance = 0, onAddNotification }: 
                   {l.otpReceived ? (
                     <div className="mt-2.5 flex items-center justify-between rounded-lg bg-emerald-500/10 border border-emerald-500/20 px-3 py-2">
                       <span className="text-emerald-200 text-xs">OTP: <span className="font-mono font-bold text-base text-white tracking-wider">{l.otpReceived}</span></span>
-                      <button onClick={() => copy(l.otpReceived!)} className="text-emerald-300 hover:text-white cursor-pointer"><Copy className="h-4 w-4" /></button>
+                      <button onClick={() => copy(l.otpReceived!, "otp-" + l.id)} title="Copy code" className="text-emerald-300 hover:text-white cursor-pointer">
+                        {copiedKey === "otp-" + l.id ? <CheckCircle2 className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
+                      </button>
                     </div>
                   ) : l.status === "active" ? (
                     <div className="mt-2.5 flex items-center justify-between">

@@ -4653,8 +4653,9 @@ app.get("/api/admin/sms/route-plan", authenticateToken, async (req, res) => {
 app.get("/api/sms/pools", authenticateToken, async (req, res) => {
   try {
     const rows = await smsPools.getCustomerPools();
-    // Never expose the real provider to the customer — only the neutral label.
-    res.json({ success: true, pools: rows.map((p) => ({ id: p.id, label: p.label })) });
+    // Rich customer-facing cards (label + online + success rate + latency). Never the provider.
+    const pools = await Promise.all(rows.map((p) => smsPools.poolSummary(p)));
+    res.json({ success: true, pools });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -4675,7 +4676,10 @@ app.get("/api/sms/pools/:poolId/services", authenticateToken, async (req, res) =
   if (!country) return res.status(400).json({ error: "country is required" });
   try {
     const services = await smsPools.poolServices(req.params.poolId, String(country));
-    res.json({ success: true, services });
+    // Customer-facing: expose ONLY the final selling price. Never leak provider cost, raw price,
+    // markup, or profit (hidden internal pricing requirement).
+    const safe = services.map((s) => ({ id: s.id, name: s.name, stock: s.stock, inStock: s.inStock, priceNgn: s.priceNgn, successRate: s.successRate ?? null }));
+    res.json({ success: true, services: safe });
   } catch (err) {
     res.status(502).json({ error: err.code || "PROVIDER_ERROR", message: "Could not load services for this pool/country." });
   }
@@ -4687,7 +4691,8 @@ app.get("/api/sms/pools/:poolId/price", authenticateToken, async (req, res) => {
   if (!country || !service) return res.status(400).json({ error: "country and service are required" });
   try {
     const price = await smsPools.poolPrice(req.params.poolId, String(country), String(service));
-    res.json({ success: true, ...price });
+    // Only the final selling price + availability reach the customer.
+    res.json({ success: true, priceNgn: price.priceNgn, inStock: price.inStock, stock: price.stock, successRate: price.successRate ?? null });
   } catch (err) {
     res.status(502).json({ error: err.code || "PRICE_UNAVAILABLE", message: "Live price is unavailable right now. Please try again." });
   }

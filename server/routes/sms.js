@@ -20,6 +20,24 @@ async function smsAudit({ event, provider = "router", detail = "", status = "ok"
   try { await logProviderCall({ provider, action: event, request: "", response: detail, status, userId }); } catch (e) {}
 }
 
+// Translate ANY internal/provider error into a safe, professional customer message.
+// The real error is always logged internally (admins see it in provider logs); customers never do.
+function customerSafeError(code, rawMessage) {
+  const m = String(rawMessage || "").toLowerCase();
+  if (code === "INSUFFICIENT_FUNDS") return "Insufficient wallet balance for this purchase.";
+  if (code === "DUPLICATE") return "This purchase is already being processed. Please wait a moment.";
+  // Out-of-stock family → honest, friendly.
+  if (/no free phones|out of stock|no stock|no numbers|not available|no available|noStock/i.test(m) || code === "OUT_OF_STOCK")
+    return "This number is currently unavailable. Please try another country, service, or pool.";
+  // Provider balance / auth / infra issues → generic "temporarily unavailable" (never leak details).
+  if (/balance|insufficient|no_key|api key|auth|unauthor|forbidden|token/i.test(m))
+    return "This pool is temporarily unavailable. Please try another pool or try again shortly.";
+  if (/timeout|timed out|econn|socket|network|refused|502|503|504|gateway/i.test(m))
+    return "Unable to complete the request right now. Please try again.";
+  // Anything else → safe generic.
+  return "Service temporarily unavailable. Please try again.";
+}
+
 const getPricingSettings = async () => {
   try {
     const row = await dbGet("SELECT smm_multiplier, smm_flat_addition, sms_flat_margin, sms_session_timeout, sms_auto_cancel_timeout, sms_cancel_delay, sms_poll_interval FROM settings LIMIT 1");
@@ -690,13 +708,16 @@ router.post('/pools/:poolId/buy', async (req, res) => {
 
   try {
     const pool = await smsPools.getPool(poolId);
-    if (!pool || pool.enabled !== 1) return res.status(404).json({ error: "This pool is unavailable." });
+    if (!pool || pool.enabled !== 1) return res.status(404).json({ error: "This pool is currently unavailable." });
 
     // (1) Live price + stock straight from the provider (never cached/faked). Verify stock now.
     let priced;
     try { priced = await smsPools.poolPrice(poolId, String(country), String(service)); }
-    catch (e) { return res.status(502).json({ error: "Live price/stock unavailable for this selection. Please try again." }); }
-    if (!priced.inStock) return res.status(409).json({ error: "Out of stock for this selection in this pool." });
+    catch (e) {
+      await smsAudit({ event: "buy_price_fail", provider: pool.provider, detail: `pool=${poolId} ${e.message}`, status: "fail", userId: req.user.id });
+      return res.status(502).json({ error: customerSafeError(e.code, e.message) });
+    }
+    if (!priced.inStock) return res.status(409).json({ error: "This number is currently unavailable. Please try another country, service, or pool." });
 
     const costNgn = priced.priceNgn;
     const providerCostNgn = priced.providerPriceNgn;
@@ -743,8 +764,10 @@ router.post('/pools/:poolId/buy', async (req, res) => {
     );
 
     if (!out.ok) {
+      // Log the REAL reason for admins; return a professional, safe message to the customer.
+      await smsAudit({ event: "buy_failed", provider: pool.provider, detail: `pool=${poolId} code=${out.code} ${out.error || ""}`, status: "fail", userId: req.user.id });
       const status = out.code === "INSUFFICIENT_FUNDS" ? 400 : out.code === "DUPLICATE" ? 429 : 502;
-      return res.status(status).json({ error: out.error });
+      return res.status(status).json({ error: customerSafeError(out.code, out.error) });
     }
     // Mask the provider — customer only sees the pool label + their number.
     return res.json({ success: true, id: internalId, number: bought.number, pool: pool.label, activationId: internalId });
