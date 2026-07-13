@@ -184,12 +184,19 @@ function RelatedProductsPicker({ allProducts, excludeId, selectedCsv, onChange, 
 // Replaces the long horizontal tab strip. Each item's `tab` maps to an existing
 // AdminPanel pane id (so functionality is untouched); `coming: true` items are new
 // IA destinations that render a friendly placeholder until built.
+// ————————————————————————————————————————————————————————————————
+// ADMIN INFORMATION ARCHITECTURE
+// Enterprise-grade, deduplicated navigation. Every underlying tab id is
+// referenced exactly once so there are no duplicate destinations. Related
+// features are grouped into clear, self-explanatory categories, and SMS /
+// SMM / Integrations now have dedicated homes instead of being buried in a
+// catch-all "System" section. Labels are written to be immediately obvious.
+// ————————————————————————————————————————————————————————————————
 const ADMIN_NAV_SECTIONS: AdminNavSection[] = [
   {
     id: "dashboard", label: "Dashboard", icon: LayoutDashboard, items: [
-      { label: "Overview", tab: "operations" },
-      { label: "Analytics", tab: "bi" },
-      { label: "Activity Logs", tab: "audit" },
+      { label: "Command Center", tab: "operations" },
+      { label: "Activity Log", tab: "audit" },
     ],
   },
   {
@@ -197,57 +204,64 @@ const ADMIN_NAV_SECTIONS: AdminNavSection[] = [
       { label: "Products", tab: "mp_products" },
       { label: "Orders", tab: "mp_orders" },
       { label: "Categories", tab: "categories" },
-      { label: "Inventory", tab: "credentials" },
+      { label: "Inventory (Credentials)", tab: "credentials" },
       { label: "Reviews", tab: "reviews" },
-      { label: "Advanced Product Studio", tab: "products" },
-      { label: "Brands", coming: true },
+      { label: "Product Studio", tab: "products" },
     ],
   },
   {
     id: "gift", label: "International Gifting", icon: Gift, items: [
       { label: "Products", tab: "gift_products" },
       { label: "Orders", tab: "gift_orders" },
-      { label: "Delivery Settings", tab: "settings" },
-      { label: "Legacy Gift Console", tab: "gifts" },
-      { label: "Categories", coming: true },
+      { label: "Gift Console", tab: "gifts" },
     ],
   },
   {
     id: "esim", label: "eSIM", icon: Wifi, items: [
       { label: "Products", tab: "esim_products" },
       { label: "Orders", tab: "esim_orders" },
-      { label: "Provider Settings", tab: "settings" },
-      { label: "Plans", coming: true },
     ],
   },
   {
     id: "physicalsim", label: "Physical SIM", icon: CreditCard, items: [
       { label: "Products", tab: "psim_products" },
       { label: "Orders", tab: "psim_orders" },
-      { label: "Shipping Settings", tab: "settings" },
-      { label: "Inventory", tab: "credentials" },
+    ],
+  },
+  {
+    id: "sms", label: "SMS / Virtual Numbers", icon: MessageSquare, items: [
+      { label: "Pools", tab: "sms_pools" },
+      { label: "Configuration", tab: "sms_config" },
+      { label: "Live Management", tab: "sms" },
+      { label: "Instructions", tab: "sms_instructions" },
+    ],
+  },
+  {
+    id: "smm", label: "SMM Panel", icon: Send, items: [
+      { label: "Sync Health", tab: "smm_sync" },
+      { label: "Instructions", tab: "smm_instructions" },
     ],
   },
   {
     id: "orders", label: "Orders & Transactions", icon: Package, items: [
-      { label: "Marketplace Orders", tab: "orders" },
+      { label: "All Orders", tab: "orders" },
       { label: "Manual Fulfillment", tab: "manual_fulfillment" },
       { label: "Payment History", tab: "txs" },
-      { label: "Recharge Codes", tab: "recharge" },
       { label: "Refunds", tab: "refunds" },
     ],
   },
   {
     id: "payments", label: "Wallet & Payments", icon: Wallet, items: [
-      { label: "Payment Methods & Wallet", tab: "settings" },
-      { label: "Flutterwave", tab: "flutterwave" },
-      { label: "Monnify", tab: "monnify" },
+      { label: "Flutterwave Gateway", tab: "flutterwave" },
+      { label: "Monnify Gateway", tab: "monnify" },
+      { label: "Recharge & Voucher Codes", tab: "recharge" },
     ],
   },
   {
-    id: "users", label: "Users", icon: Users, items: [
+    id: "users", label: "Users & Access", icon: Users, items: [
       { label: "Customers & Staff", tab: "users" },
       { label: "Roles & Permissions", tab: "permissions" },
+      { label: "Security Center", tab: "security" },
     ],
   },
   {
@@ -255,44 +269,39 @@ const ADMIN_NAV_SECTIONS: AdminNavSection[] = [
       { label: "Announcements", tab: "announcements" },
       { label: "Banners", tab: "banners" },
       { label: "Referral Program", tab: "referrals_admin" },
-      { label: "Coupons & Promotions", coming: true },
     ],
   },
   {
-    id: "content", label: "Content", icon: FileText, items: [
+    id: "content", label: "Content & Support", icon: FileText, items: [
       { label: "Knowledge Base & Docs", tab: "docs" },
       { label: "Form Builder", tab: "forms" },
       { label: "Homepage Builder", tab: "homepage" },
       { label: "Media Library", tab: "media" },
-      { label: "Support & FAQs", tab: "support" },
+      { label: "Support Links & FAQs", tab: "support" },
     ],
   },
   {
-    id: "reports", label: "Reports", icon: BarChart3, items: [
+    id: "reports", label: "Reports & Analytics", icon: BarChart3, items: [
       { label: "Business Intelligence", tab: "bi" },
-      { label: "Customer Reports & Support", tab: "reports" },
+      { label: "Customer Reports", tab: "reports" },
       { label: "Customer Feedback", tab: "feedback" },
     ],
   },
   {
-    id: "system", label: "System", icon: Settings, items: [
-      { label: "Platform Settings", tab: "platform" },
-      { label: "Settings Center", tab: "settings_center" },
-      { label: "Settings & Alerts", tab: "settings" },
-      { label: "API Keys & Gateways", tab: "settings" },
-      { label: "Checkout Fields", tab: "checkout_fields" },
-      { label: "SMM Instructions", tab: "smm_instructions" },
-      { label: "SMS Instructions", tab: "sms_instructions" },
-      { label: "SMM Sync Health", tab: "smm_sync" },
-      { label: "Telegram Bot", tab: "telegram" },
-      { label: "Settings Rollback", tab: "settings_rollback" },
-      { label: "Security Center", tab: "security" },
+    id: "integrations", label: "Integrations & Monitoring", icon: Activity, items: [
       { label: "Provider Overview", tab: "provider_overview" },
-      { label: "SMS Pools", tab: "sms_pools" },
-      { label: "SMS Configuration", tab: "sms_config" },
-      { label: "SMS Management", tab: "sms" },
       { label: "Health Monitor", tab: "health" },
+      { label: "Telegram Bot", tab: "telegram" },
       { label: "AI Assistant", tab: "ai" },
+    ],
+  },
+  {
+    id: "system", label: "System Settings", icon: Settings, items: [
+      { label: "General Settings", tab: "settings" },
+      { label: "Settings Center", tab: "settings_center" },
+      { label: "Platform Settings", tab: "platform" },
+      { label: "Checkout Fields", tab: "checkout_fields" },
+      { label: "Settings Rollback", tab: "settings_rollback" },
     ],
   },
 ];
@@ -2330,31 +2339,53 @@ export default function AdminPanel() {
       {/* All admin notifications flow through the GLOBAL unified toast system (see main.tsx). */}
 
       {/* ——— HEADER ——— */}
-      <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
-        <div>
-          <div className="flex items-center gap-2 text-purple-400 font-semibold text-xs uppercase tracking-wider mb-1 font-space">
-            <ShieldAlert className="h-4 w-4" />
-            <span>AVS Enterprise Admin Hub Console</span>
+      {(() => {
+        // Resolve the current section + item so the header shows a live breadcrumb.
+        const section = ADMIN_NAV_SECTIONS.find((s) => s.items.some((it) => adminNavItemId(it) === activeTab));
+        const item = section?.items.find((it) => adminNavItemId(it) === activeTab);
+        const SectionIcon = section?.icon || ShieldAlert;
+        return (
+          <div className="rounded-2xl border border-purple-500/15 bg-gradient-to-br from-[#120a2c] via-[#0c0620] to-[#0a0518] p-5 sm:p-6">
+            <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 text-purple-400/70 font-semibold text-[10px] uppercase tracking-[0.15em] mb-2 font-space">
+                  <SectionIcon className="h-3.5 w-3.5" />
+                  <span className="truncate">{section?.label || "Admin"}</span>
+                  {item && (
+                    <>
+                      <span className="text-purple-500/40">/</span>
+                      <span className="text-cyan-300/80 truncate">{item.label}</span>
+                    </>
+                  )}
+                </div>
+                <h2 className="text-2xl sm:text-3xl font-bold font-space text-white flex items-center gap-2.5">
+                  <span className="text-transparent bg-clip-text bg-gradient-to-r from-white via-purple-100 to-cyan-300">
+                    {item?.label || "Command Center"}
+                  </span>
+                </h2>
+                <p className="text-xs sm:text-sm text-purple-200/50 mt-1 max-w-2xl">
+                  AVS Enterprise Control Center — manage products, orders, wallets, providers, users and platform settings from one organized console.
+                </p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0 self-start sm:self-center">
+                <UniversalSearch onNavigate={(section) => {
+                  const map: Record<string, string> = { products: "products", orders: "orders", users: "users", credentials: "credentials" };
+                  if (map[section]) setActiveTab(map[section]);
+                }} />
+                <Button onClick={fetchAdminData} size="md" className="flex items-center gap-1.5">
+                  <RefreshCw className="h-4 w-4" />
+                  <span className="hidden sm:inline">Sync</span>
+                </Button>
+              </div>
+            </div>
           </div>
-          <h2 className="text-2xl sm:text-3xl font-bold font-space text-white">AVS Admin Cockpit</h2>
-          <p className="text-xs sm:text-sm text-purple-200/60 mt-1">
-            Override margins, adjust wallet balances by Username/Email, add new AVS services, monitor API gateways, and manage database recovery.
-          </p>
-        </div>
-        <div className="flex items-center gap-2 shrink-0 self-start sm:self-center">
-          <UniversalSearch onNavigate={(section) => {
-            const map: Record<string, string> = { products: "products", orders: "orders", users: "users", credentials: "credentials" };
-            if (map[section]) setActiveTab(map[section]);
-          }} />
-          <Button onClick={fetchAdminData} size="md" className="flex items-center gap-1.5">
-            <RefreshCw className="h-4 w-4" />
-            <span>Sync Operations</span>
-          </Button>
-        </div>
-      </div>
+        );
+      })()}
 
-      {/* ——— TOP REAL-TIME ANALYTICS WIDGETS (hidden on Operations Center which has its own) ——— */}
-      {activeTab !== "operations" && (
+      {/* ——— TOP REAL-TIME ANALYTICS WIDGETS ———
+          Shown only on the reporting/analytics surfaces (Command Center has its
+          own richer widgets). Keeping deep settings/config pages uncluttered. */}
+      {(["audit", "bi", "reports"].includes(activeTab)) && (
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-5">
         <Card className="p-5 bg-gradient-to-br from-[#12092a] to-[#0c051a]">
           <div className="flex items-center justify-between mb-3">

@@ -3,6 +3,7 @@ import {
   DollarSign, ShoppingBag, Users, Package, Key, Bell, TrendingUp, AlertTriangle,
   Clock, RotateCcw, Image as ImageIcon, LayoutGrid, Activity, ChevronRight,
   Loader2, ArrowUpRight, ShieldCheck, UserPlus, RefreshCw, Megaphone,
+  Server, Wifi, WifiOff, Zap, PlusCircle, FileText,
 } from "lucide-react";
 import { Card } from "../ui/shadcn";
 import { useToast } from "../ui/Toast";
@@ -38,10 +39,21 @@ interface Props {
 
 const fmtN = (n: number) => "₦" + Math.round(n || 0).toLocaleString();
 
+interface ProviderHealth {
+  provider: string;
+  online?: number | boolean;
+  last_latency_ms?: number;
+  success_count?: number;
+  failure_count?: number;
+  balance?: number | null;
+}
+
 export default function OperationsCenter({ onNavigate }: Props) {
   const { toast } = useToast();
   const [ops, setOps] = useState<Ops | null>(null);
   const [loading, setLoading] = useState(true);
+  const [providers, setProviders] = useState<ProviderHealth[] | null>(null);
+  const [balances, setBalances] = useState<Record<string, number | null>>({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -50,7 +62,17 @@ export default function OperationsCenter({ onNavigate }: Props) {
     finally { setLoading(false); }
   }, [toast]);
 
-  useEffect(() => { load(); }, [load]);
+  // Provider balances + health are loaded separately so a slow/offline provider
+  // never blocks the main dashboard from rendering.
+  const loadProviders = useCallback(async () => {
+    try {
+      const r = await apiFetch("/api/admin/sms/providers");
+      if (r && Array.isArray(r.health)) setProviders(r.health);
+      if (r && r.balances && typeof r.balances === "object") setBalances(r.balances);
+    } catch { /* non-fatal: provider widget just stays hidden */ }
+  }, []);
+
+  useEffect(() => { load(); loadProviders(); }, [load, loadProviders]);
 
   if (loading || !ops) return <div className="py-16 text-center text-purple-300/50 text-xs"><Loader2 className="h-6 w-6 animate-spin mx-auto mb-2" />Loading operations…</div>;
 
@@ -61,7 +83,27 @@ export default function OperationsCenter({ onNavigate }: Props) {
           <h3 className="text-base sm:text-lg font-bold text-white font-space tracking-tight flex items-center gap-2"><Activity className="h-5 w-5 text-cyan-400" /> Operations Center</h3>
           <p className="text-xs text-purple-200/50 mt-0.5">Your live control hub. Every card is clickable — jump straight to the module you need.</p>
         </div>
-        <button onClick={load} className="px-3 py-1.5 rounded-lg border border-purple-500/25 bg-purple-500/10 hover:bg-purple-500/20 text-[11px] font-bold text-purple-200 flex items-center gap-1 cursor-pointer"><RefreshCw className="h-3.5 w-3.5" /> Refresh</button>
+        <button onClick={() => { load(); loadProviders(); }} className="px-3 py-1.5 rounded-lg border border-purple-500/25 bg-purple-500/10 hover:bg-purple-500/20 text-[11px] font-bold text-purple-200 flex items-center gap-1 cursor-pointer"><RefreshCw className="h-3.5 w-3.5" /> Refresh</button>
+      </div>
+
+      {/* Quick actions — the handful of tasks admins do most often, one tap away. */}
+      <div className="flex flex-wrap gap-2">
+        {[
+          { icon: <PlusCircle className="h-3.5 w-3.5" />, label: "Add Product", tab: "products" },
+          { icon: <Package className="h-3.5 w-3.5" />, label: "Pending Orders", tab: "orders", payload: { filter: "pending" } },
+          { icon: <Users className="h-3.5 w-3.5" />, label: "Manage Users", tab: "users" },
+          { icon: <Zap className="h-3.5 w-3.5" />, label: "SMS Pools", tab: "sms_pools" },
+          { icon: <Megaphone className="h-3.5 w-3.5" />, label: "Announcement", tab: "announcements" },
+          { icon: <FileText className="h-3.5 w-3.5" />, label: "Recharge Codes", tab: "recharge" },
+        ].map((a) => (
+          <button
+            key={a.label}
+            onClick={() => onNavigate(a.tab, a.payload)}
+            className="px-3 py-1.5 rounded-lg border border-cyan-500/25 bg-cyan-500/[0.06] hover:bg-cyan-500/15 text-[11px] font-bold text-cyan-200 flex items-center gap-1.5 cursor-pointer transition"
+          >
+            {a.icon}{a.label}
+          </button>
+        ))}
       </div>
 
       {/* Primary KPI row */}
@@ -169,6 +211,46 @@ export default function OperationsCenter({ onNavigate }: Props) {
           </div>
         </Card>
       </div>
+
+      {/* Provider health & balances — live status of the SMS/virtual-number providers. */}
+      {providers && providers.length > 0 && (
+        <Card className="border border-purple-500/10">
+          <button onClick={() => onNavigate("provider_overview")} className="w-full flex items-center justify-between mb-3 cursor-pointer group">
+            <span className="flex items-center gap-2 text-white font-bold font-space text-sm"><Server className="h-4 w-4 text-cyan-400" /> Provider Health & Balances</span>
+            <ChevronRight className="h-4 w-4 text-purple-300/40 group-hover:text-white" />
+          </button>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {providers.map((h) => {
+              const online = h.online === 1 || h.online === true;
+              const bal = balances[h.provider] ?? h.balance;
+              const total = (h.success_count || 0) + (h.failure_count || 0);
+              const rate = total >= 5 ? Math.round(((h.success_count || 0) / total) * 100) : null;
+              return (
+                <div key={h.provider} className={`rounded-xl border p-3 ${online ? "border-emerald-500/20 bg-emerald-500/[0.04]" : "border-red-500/20 bg-red-500/[0.04]"}`}>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-white font-space capitalize">{h.provider}</span>
+                    {online
+                      ? <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-300"><Wifi className="h-3 w-3" /> Online</span>
+                      : <span className="flex items-center gap-1 text-[10px] font-bold text-red-300"><WifiOff className="h-3 w-3" /> Offline</span>}
+                  </div>
+                  <div className="mt-2 flex items-center justify-between text-[10px] text-purple-200/60">
+                    <span>Balance</span>
+                    <span className="font-mono font-bold text-white">{bal == null ? "—" : `$${Number(bal).toFixed(2)}`}</span>
+                  </div>
+                  <div className="mt-1 flex items-center justify-between text-[10px] text-purple-200/60">
+                    <span>Latency</span>
+                    <span className="font-mono text-purple-100">{h.last_latency_ms ? `${h.last_latency_ms}ms` : "—"}</span>
+                  </div>
+                  <div className="mt-1 flex items-center justify-between text-[10px] text-purple-200/60">
+                    <span>Success</span>
+                    <span className="font-mono text-purple-100">{rate == null ? "New" : `${rate}%`}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      )}
 
       {/* Platform navigation tiles */}
       <div>
