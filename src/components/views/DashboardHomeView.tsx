@@ -171,7 +171,7 @@ export default function DashboardHomeView({
             <h3 className="text-sm md:text-base lg:text-lg font-bold text-white font-space tracking-tight">Quick Actions</h3>
             <p className="text-xs text-purple-200/60 mt-0.5">Rapid access to high-tier service execution rails</p>
           </div>
-          <Badge variant="info">Lightning Nodes</Badge>
+          <Badge variant="info">Lightning Channels</Badge>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 sm:gap-4">
           {[

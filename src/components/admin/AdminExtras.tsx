@@ -150,6 +150,77 @@ export function ReportsPanel() {
 }
 
 // ——— Customer Feedback (Item 10) ———
+// ——— Feedback popup configuration (admin-controlled) ———
+export function FeedbackConfigPanel() {
+  const { toast } = useToast();
+  const [cfg, setCfg] = useState<any | null>(null);
+  const [saving, setSaving] = useState(false);
+  const load = useCallback(async () => {
+    try { const r = await apiFetch("/api/admin/feedback-config"); setCfg(r.config); }
+    catch (e: any) { toast("Failed to load feedback config: " + e.message, "error"); }
+  }, [toast]);
+  useEffect(() => { load(); }, [load]);
+
+  const save = async (patch: any) => {
+    setSaving(true);
+    try {
+      const r = await apiFetch("/api/admin/feedback-config", { method: "POST", body: JSON.stringify(patch) });
+      if (r.config) setCfg(r.config);
+      toast("Feedback settings saved.", "success");
+    } catch (e: any) { toast("Save failed: " + e.message, "error"); }
+    finally { setSaving(false); }
+  };
+
+  if (!cfg) return <Card className="p-4"><div className="py-6 text-center text-purple-200/40 text-xs">Loading feedback settings…</div></Card>;
+
+  const inp = "w-full bg-black/40 border border-purple-500/20 text-xs text-white px-2.5 py-1.5 rounded-lg focus:outline-none focus:border-cyan-500/40";
+  return (
+    <Card className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-base font-bold text-white font-space">Feedback Popup Settings</h3>
+          <p className="text-xs text-purple-200/50 mt-0.5">Control the post-success feedback popup. It only appears after a customer successfully receives an SMS code.</p>
+        </div>
+        <button onClick={() => save({ enabled: !cfg.enabled })} disabled={saving}
+          className={`px-3 py-1 rounded-full text-[11px] font-bold cursor-pointer ${cfg.enabled ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30" : "bg-neutral-600/30 text-neutral-400 border border-white/10"}`}>
+          {cfg.enabled ? "ENABLED" : "DISABLED"}
+        </button>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className="space-y-1">
+          <label className="text-[10px] font-bold text-purple-200/60 uppercase tracking-wide">Appearance delay (seconds)</label>
+          <input type="number" min={0} max={120} defaultValue={cfg.delaySeconds} onBlur={(e) => save({ delaySeconds: parseInt(e.target.value) || 0 })} className={inp} />
+          <p className="text-[9px] text-white/30">Wait this long after a code is received before showing the popup.</p>
+        </div>
+        <div className="space-y-1">
+          <label className="text-[10px] font-bold text-purple-200/60 uppercase tracking-wide">Auto-dismiss timeout (seconds)</label>
+          <input type="number" min={0} max={600} defaultValue={cfg.timeoutSeconds} onBlur={(e) => save({ timeoutSeconds: parseInt(e.target.value) || 0 })} className={inp} />
+          <p className="text-[9px] text-white/30">Auto-close after N seconds. 0 = stays until the customer acts.</p>
+        </div>
+        <div className="space-y-1">
+          <label className="text-[10px] font-bold text-purple-200/60 uppercase tracking-wide">Feedback requirement</label>
+          <select value={cfg.required ? "1" : "0"} onChange={(e) => save({ required: e.target.value === "1" })} className={inp}>
+            <option value="0">Optional (customer can dismiss)</option>
+            <option value="1">Required (must submit a rating)</option>
+          </select>
+          <p className="text-[9px] text-white/30">Required hides the close button and disables auto-dismiss.</p>
+        </div>
+        <div className="space-y-1">
+          <label className="text-[10px] font-bold text-purple-200/60 uppercase tracking-wide">Popup position</label>
+          <select value={cfg.position} onChange={(e) => save({ position: e.target.value })} className={inp}>
+            <option value="bottom-left">Bottom left</option>
+            <option value="bottom-right">Bottom right</option>
+            <option value="top-left">Top left</option>
+            <option value="top-right">Top right</option>
+            <option value="center">Center</option>
+          </select>
+          <p className="text-[9px] text-white/30">Where the popup renders on the customer's screen.</p>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 export function FeedbackPanel() {
   const { toast } = useToast();
   const [rows, setRows] = useState<any[]>([]);
@@ -165,6 +236,8 @@ export function FeedbackPanel() {
   useEffect(() => { load(); }, [load]);
 
   return (
+    <div className="space-y-4">
+    <FeedbackConfigPanel />
     <Card className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
@@ -192,6 +265,7 @@ export function FeedbackPanel() {
         </div>
       )}
     </Card>
+    </div>
   );
 }
 

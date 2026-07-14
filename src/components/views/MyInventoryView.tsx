@@ -161,7 +161,7 @@ export default function MyInventoryView({ userName, userEmail, onSelectSection }
       {/* Header */}
       <div className="pb-4 border-b border-purple-500/10 text-left">
         <div className="flex items-center gap-2 text-purple-400 font-semibold text-xs uppercase tracking-wider mb-1 font-space">
-          <Key className="h-4 w-4" /> <span>My Secure Digital Node</span>
+          <Key className="h-4 w-4" /> <span>My Secure Digital Channel</span>
         </div>
         <h2 className="text-2xl sm:text-3xl font-bold font-space text-white">My Inventory</h2>
         <p className="text-xs sm:text-sm text-purple-200/60 mt-1 max-w-2xl">
@@ -291,7 +291,7 @@ export default function MyInventoryView({ userName, userEmail, onSelectSection }
 
               {(viewedCredentialsOrder.esim_qr_code || viewedCredentialsOrder.esim_activation_code) && (
                 <div className="p-4 bg-cyan-950/15 border border-cyan-500/20 rounded-2xl space-y-4">
-                  <span className="font-bold text-cyan-400 font-space uppercase block border-b border-cyan-500/10 pb-1.5 text-xs">📶 eSIM ACTIVATION NODE</span>
+                  <span className="font-bold text-cyan-400 font-space uppercase block border-b border-cyan-500/10 pb-1.5 text-xs">📶 eSIM ACTIVATION CHANNEL</span>
                   <div className="flex flex-col md:flex-row items-center gap-6 justify-center">
                     {viewedCredentialsOrder.esim_qr_code && <div className="p-4 bg-white rounded-3xl shrink-0 flex items-center justify-center shadow-lg w-40 h-44"><QrCode className="h-32 w-32 text-black" /></div>}
                     <div className="space-y-3 text-left w-full text-xs">

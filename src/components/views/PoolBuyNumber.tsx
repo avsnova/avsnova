@@ -10,7 +10,7 @@ import { useConfirm } from "../ui/ConfirmDialog";
 
 /**
  * PoolBuyNumber — provider-independent "pools" purchase console (advanced HUD redesign).
- * Flow: pick a Pool (node) → that pool's OWN countries → services (live price+stock) → confirm → buy.
+ * Flow: pick a Channel (pool) → that pool's OWN countries → services (live price+stock) → confirm → buy.
  * Providers are masked (customer only sees pool labels). Timers come from the provider.
  * NO flags / NO brand logos — pure typographic/HUD aesthetic. Logic identical to prior version;
  * only the layout/visual structure changed. Backed by /api/sms/pools/* and /api/sms/numbers.
@@ -63,19 +63,18 @@ export default function PoolBuyNumber({ walletBalance = 0, onAddNotification }: 
 
   useEffect(() => { apiFetch("/api/sms/instructions").then((r) => setInstructions(r.instructions || [])).catch(() => {}); }, []);
 
-  useEffect(() => {
-    (async () => {
-      setPoolsLoading(true);
-      try { const r = await apiFetch("/api/sms/pools"); setPools(r.pools || []); if ((r.pools || []).length === 1) setPool(r.pools[0]); }
-      catch (e: any) { toast("Could not load pools: " + e.message, "error"); }
-      finally { setPoolsLoading(false); }
-    })();
+  const loadPools = useCallback(async () => {
+    setPoolsLoading(true);
+    try { const r = await apiFetch("/api/sms/pools"); setPools(r.pools || []); if ((r.pools || []).length === 1) setPool(r.pools[0]); }
+    catch (e: any) { toast("Could not load pools: " + e.message, "error"); }
+    finally { setPoolsLoading(false); }
   }, [toast]);
+  useEffect(() => { loadPools(); }, [loadPools]);
 
   const loadCountries = useCallback(async (p: Pool) => {
     setCountriesLoading(true); setCountriesError(""); setCountries([]); setCountry(null); setServices([]); setService(null);
     try { const r = await apiFetch(`/api/sms/pools/${p.id}/countries`); setCountries(r.countries || []); }
-    catch (e: any) { setCountriesError("This node's regions are unavailable right now. Try another node or refresh."); }
+    catch (e: any) { setCountriesError("This channel's regions are unavailable right now. Try another channel or refresh."); }
     finally { setCountriesLoading(false); }
   }, []);
   useEffect(() => { if (pool) loadCountries(pool); }, [pool, loadCountries]);
@@ -118,11 +117,11 @@ export default function PoolBuyNumber({ walletBalance = 0, onAddNotification }: 
 
   const doBuy = async () => {
     if (!pool || !country || !service) return;
-    if (!service.inStock) { toast("This service is out of stock in this node.", "warning"); return; }
+    if (!service.inStock) { toast("This service is out of stock in this channel.", "warning"); return; }
     if (walletBalance < service.priceNgn) { toast(`Insufficient balance. You need ${naira(service.priceNgn)}.`, "error"); return; }
     const ok = await confirm({
       title: "Confirm acquisition",
-      message: `Node: ${pool.label}\nService: ${service.name}\nRegion: ${country.name}\n\nPrice: ${naira(service.priceNgn)}\n\nA number will be reserved from ${pool.label}. Continue?`,
+      message: `Channel: ${pool.label}\nService: ${service.name}\nRegion: ${country.name}\n\nPrice: ${naira(service.priceNgn)}\n\nA number will be reserved from ${pool.label}. Continue?`,
       confirmLabel: `Pay ${naira(service.priceNgn)}`, cancelLabel: "Cancel",
     });
     if (!ok) return;
@@ -131,15 +130,17 @@ export default function PoolBuyNumber({ walletBalance = 0, onAddNotification }: 
     const idem = `${pool.id}-${country.id}-${service.id}-${Date.now()}`;
     try {
       const r = await apiFetch(`/api/sms/pools/${pool.id}/buy`, { method: "POST", body: JSON.stringify({ country: country.id, service: service.id, idempotencyKey: idem }) });
-      toast(`Number acquired: +${r.number} (${pool.label})`, "success");
-      onAddNotification?.("Number ready", `Your ${pool.label} number +${r.number} is ready.`, "system");
+      // Providers return numbers with or without a leading "+"; normalise so we never render "++".
+      const num = String(r.number || "").replace(/^\++/, "");
+      toast(`Number acquired: +${num} (${pool.label})`, "success");
+      onAddNotification?.("Number ready", `Your ${pool.label} number +${num} is ready.`, "system");
       await refreshActive(); loadServices(pool, country);
     } catch (e: any) { toast(e.message || "Acquisition failed. You were not charged.", "error"); }
     finally { setBuying(false); setTimeout(() => (buyLock.current = false), 800); }
   };
 
   const cancelLine = async (line: ActiveLine) => {
-    const ok = await confirm({ title: "Release this number?", message: `Cancel +${line.number}? If the provider confirms, you'll be refunded ${naira(line.cost || 0)}.`, confirmLabel: "Release", danger: true, cancelLabel: "Keep it" });
+    const ok = await confirm({ title: "Release this number?", message: `Cancel +${String(line.number || "").replace(/^\++/, "")}? If the provider confirms, you'll be refunded ${naira(line.cost || 0)}.`, confirmLabel: "Release", danger: true, cancelLabel: "Keep it" });
     if (!ok) return;
     try { await apiFetch(`/api/sms/action/${line.id}`, { method: "POST", body: JSON.stringify({ action: 8 }) }); toast("Released and refunded.", "success"); refreshActive(); }
     catch (e: any) { toast(e.message || "The provider could not release this yet.", "warning"); }
@@ -179,7 +180,7 @@ export default function PoolBuyNumber({ walletBalance = 0, onAddNotification }: 
         </div>
         {/* progress rail */}
         <div className="relative mt-4 flex items-center gap-2">
-          {[["Node", 1], ["Region", 2], ["Service", 3], ["Deploy", 4]].map(([lbl, n], i) => (
+          {[["Channel", 1], ["Region", 2], ["Service", 3], ["Deploy", 4]].map(([lbl, n], i) => (
             <div key={i} className="flex items-center gap-2 flex-1">
               <div className={`flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-wider ${step >= (n as number) ? "text-cyan-300" : "text-white/30"}`}>
                 <span className={`h-1.5 w-1.5 rounded-full ${step > (n as number) ? "bg-emerald-400" : step === (n as number) ? "bg-cyan-400 animate-pulse" : "bg-white/20"}`} />
@@ -191,13 +192,31 @@ export default function PoolBuyNumber({ walletBalance = 0, onAddNotification }: 
         </div>
       </div>
 
-      {/* ══ MAIN GRID ══ */}
+      {/* ══ SERVICE-UNAVAILABLE STATE ══
+          When an administrator has disabled every provider/channel there is nothing to sell.
+          We show a professional, full-width notice — we NEVER fall back to the old interface. */}
+      {!poolsLoading && pools.length === 0 ? (
+        <div className="rounded-2xl border border-amber-400/25 bg-gradient-to-br from-[#1a1206] to-[#0d0a1f] p-10 text-center">
+          <div className="mx-auto h-14 w-14 rounded-2xl bg-amber-400/10 border border-amber-400/30 flex items-center justify-center mb-4">
+            <Radio className="h-7 w-7 text-amber-300" />
+          </div>
+          <h3 className="text-lg font-bold font-space text-white">SMS services are currently unavailable</h3>
+          <p className="text-sm text-white/50 mt-2 max-w-md mx-auto leading-relaxed">
+            No activation channels are online right now. Our team is on it — please check back shortly.
+            Your wallet balance is safe and no charges apply while services are paused.
+          </p>
+          <button onClick={loadPools} className="mt-5 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl border border-cyan-400/30 bg-cyan-400/10 text-cyan-200 text-xs font-bold cursor-pointer hover:bg-cyan-400/20">
+            <RefreshCw className="h-3.5 w-3.5" /> Check again
+          </button>
+        </div>
+      ) : (
+      /* ══ MAIN GRID ══ */
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
-        {/* NODES (pools) — left rail */}
+        {/* CHANNELS (pools) — left rail */}
         <section className="lg:col-span-4 rounded-2xl border border-white/10 bg-[#0c0a1a]/80 backdrop-blur p-4">
-          <SectionTitle icon={<Server className="h-4 w-4" />} label="Select Node" sub="Independent server pools" />
+          <SectionTitle icon={<Server className="h-4 w-4" />} label="Select Channel" sub="Independent number pools" />
           {poolsLoading ? <Skeletons n={3} /> : pools.length === 0 ? (
-            <Empty icon={<Server className="h-7 w-7" />} title="No nodes online" hint="An administrator needs to enable at least one node." />
+            <Empty icon={<Server className="h-7 w-7" />} title="No channels online" hint="An administrator needs to enable at least one channel." />
           ) : (
             <div className="space-y-2.5 mt-3">
               {pools.map((p) => {
@@ -236,8 +255,8 @@ export default function PoolBuyNumber({ walletBalance = 0, onAddNotification }: 
         <section className="lg:col-span-8 grid grid-cols-1 md:grid-cols-2 gap-4">
           {/* REGION (searchable dropdown, auto-closes on select) */}
           <div className="rounded-2xl border border-white/10 bg-[#0c0a1a]/80 backdrop-blur p-4 flex flex-col">
-            <SectionTitle icon={<Globe2 className="h-4 w-4" />} label="Region" sub={pool ? pool.label : "Pick a node first"} />
-            {!pool ? <Locked text="Awaiting node selection" /> : countriesLoading ? <Skeletons n={3} /> : countriesError ? (
+            <SectionTitle icon={<Globe2 className="h-4 w-4" />} label="Region" sub={pool ? pool.label : "Pick a channel first"} />
+            {!pool ? <Locked text="Awaiting channel selection" /> : countriesLoading ? <Skeletons n={3} /> : countriesError ? (
               <Empty icon={<AlertTriangle className="h-7 w-7" />} title="Unavailable" hint={countriesError} action={<Ghost onClick={() => loadCountries(pool)}>Retry</Ghost>} />
             ) : (
               <HudDropdown
@@ -301,6 +320,7 @@ export default function PoolBuyNumber({ walletBalance = 0, onAddNotification }: 
           </div>
         </section>
       </div>
+      )}
 
       {/* ══ DEPLOY BAR ══ */}
       {service && country && pool && (
@@ -343,9 +363,9 @@ export default function PoolBuyNumber({ walletBalance = 0, onAddNotification }: 
                   <span className={`absolute left-0 top-0 bottom-0 w-[3px] ${got ? "bg-emerald-400" : l.status === "active" ? "bg-cyan-400" : "bg-white/20"}`} />
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2 min-w-0">
-                      <span className="px-1.5 py-0.5 rounded bg-purple-400/15 text-purple-200 text-[9px] font-mono font-bold shrink-0">{l.poolLabel || "NODE"}</span>
-                      <span className="text-white font-mono font-bold text-sm truncate">+{l.number}</span>
-                      <button onClick={() => copy(l.number, "num-" + l.id)} title="Copy number" className="text-white/40 hover:text-cyan-300 cursor-pointer shrink-0">
+                      <span className="px-1.5 py-0.5 rounded bg-purple-400/15 text-purple-200 text-[9px] font-mono font-bold shrink-0">{l.poolLabel || "CHANNEL"}</span>
+                      <span className="text-white font-mono font-bold text-sm truncate">+{String(l.number || "").replace(/^\++/, "")}</span>
+                      <button onClick={() => copy(String(l.number || "").replace(/^\++/, ""), "num-" + l.id)} title="Copy number" className="text-white/40 hover:text-cyan-300 cursor-pointer shrink-0">
                         {copiedKey === "num-" + l.id ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
                       </button>
                     </div>

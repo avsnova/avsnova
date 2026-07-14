@@ -1,10 +1,12 @@
 import { useState, useEffect, useCallback } from "react";
 import {
-  Server, Loader2, Wifi, WifiOff, RefreshCw, Save, Zap, Activity, Gauge, DollarSign,
-  Clock, Eye, EyeOff, Power, Cpu, PlugZap, CheckCircle2, XCircle,
+  Server, Loader2, Wifi, WifiOff, RefreshCw, Save, Activity, Gauge, DollarSign,
+  Eye, EyeOff, Power, Cpu, PlugZap, KeyRound, ArrowUp, ArrowDown,
+  PowerOff, Ban, ListChecks, Phone,
 } from "lucide-react";
 import { Card, Button } from "../ui/shadcn";
 import { useToast } from "../ui/Toast";
+import { useConfirm } from "../ui/ConfirmDialog";
 import { apiFetch } from "../../utils/api";
 
 /**
@@ -24,13 +26,22 @@ const mins = (s: number) => (s == null ? "—" : `${Math.round(s / 60)}m`);
 
 export default function SmsPoolsAdmin() {
   const { toast } = useToast();
+  const confirm = useConfirm();
   const [pools, setPools] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string>("");
   const [testing, setTesting] = useState<string>("");
+  const [bulking, setBulking] = useState(false);
   const [balances, setBalances] = useState<Record<string, any>>({});
   const [health, setHealth] = useState<Record<string, any>>({});
+  const [hasKey, setHasKey] = useState<Record<string, boolean>>({});
   const [drafts, setDrafts] = useState<Record<string, any>>({});
+  const [keyDraft, setKeyDraft] = useState<Record<string, string>>({});
+  const [activeNumbers, setActiveNumbers] = useState<any[]>([]);
+  const [monitorOpen, setMonitorOpen] = useState(false);
+  const [monitorStatus, setMonitorStatus] = useState("active");
+  const [monitorLoading, setMonitorLoading] = useState(false);
+  const [cancelling, setCancelling] = useState<string>("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -45,6 +56,7 @@ export default function SmsPoolsAdmin() {
       list.forEach((x: any) => { d[x.id] = { label: x.label, markup_type: x.markup_type, markup_value: x.markup_value, session_seconds: x.session_seconds, cancel_lock_seconds: x.cancel_lock_seconds }; });
       setDrafts(d);
       if (s.balances) setBalances(s.balances);
+      if (s.hasKey) setHasKey(s.hasKey);
       const h: Record<string, any> = {};
       (s.health || []).forEach((x: any) => { h[x.provider] = x; });
       setHealth(h);
@@ -52,6 +64,74 @@ export default function SmsPoolsAdmin() {
     finally { setLoading(false); }
   }, [toast]);
   useEffect(() => { load(); }, [load]);
+
+  // Bulk enable/disable/show/hide EVERY pool at once (all providers equal).
+  const bulk = async (body: any, label: string) => {
+    setBulking(true);
+    try {
+      await apiFetch("/api/admin/sms/pools/bulk", { method: "POST", body: JSON.stringify(body) });
+      toast(label, "success");
+      await load();
+    } catch (e: any) { toast("Bulk action failed: " + e.message, "error"); }
+    finally { setBulking(false); }
+  };
+
+  // Move a pool up/down in customer-facing priority order.
+  const move = async (id: string, dir: -1 | 1) => {
+    const ids = pools.map((p) => p.id);
+    const i = ids.indexOf(id);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= ids.length) return;
+    [ids[i], ids[j]] = [ids[j], ids[i]];
+    setSaving(id);
+    try {
+      await apiFetch("/api/admin/sms/pools/reorder", { method: "POST", body: JSON.stringify({ order: ids }) });
+      await load();
+    } catch (e: any) { toast("Reorder failed: " + e.message, "error"); }
+    finally { setSaving(""); }
+  };
+
+  // Save a per-pool provider API key (equal for every provider, including Grizzly).
+  const saveKey = async (pool: any) => {
+    const val = (keyDraft[pool.id] || "").trim();
+    if (!val) return;
+    setSaving(pool.id);
+    try {
+      const col = `${pool.provider}_api_key`;
+      await apiFetch("/api/admin/sms/providers", { method: "POST", body: JSON.stringify({ [col]: val }) });
+      toast("API key saved.", "success");
+      setKeyDraft((k) => ({ ...k, [pool.id]: "" }));
+      await load();
+    } catch (e: any) { toast("Key save failed: " + e.message, "error"); }
+    finally { setSaving(""); }
+  };
+
+  // Live active-numbers monitor across ALL users + pools.
+  const loadMonitor = useCallback(async (status: string) => {
+    setMonitorLoading(true);
+    try {
+      const r = await apiFetch(`/api/admin/sms/active-numbers?status=${encodeURIComponent(status)}`);
+      setActiveNumbers(r.numbers || []);
+    } catch (e: any) { toast("Failed to load numbers: " + e.message, "error"); }
+    finally { setMonitorLoading(false); }
+  }, [toast]);
+  useEffect(() => { if (monitorOpen) loadMonitor(monitorStatus); }, [monitorOpen, monitorStatus, loadMonitor]);
+
+  const forceCancel = async (n: any) => {
+    const ok = await confirm({
+      title: "Force-cancel this number?",
+      message: `Number: ${n.number || n.id}\nCustomer: ${n.user_email || n.user_id}\nCost: ₦${Number(n.cost || 0).toLocaleString()}\n\nThis releases it upstream (provider permitting), marks it cancelled, and refunds the customer's wallet. This cannot be undone.`,
+      confirmLabel: "Force-cancel & refund", cancelLabel: "Keep it",
+    });
+    if (!ok) return;
+    setCancelling(n.id);
+    try {
+      const r = await apiFetch(`/api/admin/sms/active-numbers/${n.id}/force-cancel`, { method: "POST" });
+      toast(`Cancelled. ${r.refunded ? "Customer refunded." : "No refund needed."} ${r.providerReleased ? "Released upstream." : "Provider not released (marked locally)."}`, "success");
+      await loadMonitor(monitorStatus);
+    } catch (e: any) { toast("Force-cancel failed: " + e.message, "error"); }
+    finally { setCancelling(""); }
+  };
 
   const patch = async (id: string, body: any, quiet = false) => {
     setSaving(id);
@@ -81,13 +161,76 @@ export default function SmsPoolsAdmin() {
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
           <h3 className="text-base sm:text-lg font-bold text-white font-space tracking-tight flex items-center gap-2"><Server className="h-5 w-5 text-cyan-400" /> SMS Pools</h3>
-          <p className="text-xs text-purple-200/50 mt-0.5">Each pool = one provider behind a neutral customer label. Enable/disable, rename, set markup &amp; manual timers, test connectivity. No provider is protected.</p>
+          <p className="text-xs text-purple-200/50 mt-0.5">Each pool = one provider behind a neutral customer label. Enable/disable, rename, reorder, set markup, timers &amp; API keys, test connectivity. Every provider is equal — none is protected.</p>
         </div>
         <Button variant="outline" size="sm" onClick={load} className="cursor-pointer"><RefreshCw className="h-3.5 w-3.5 mr-1" /> Refresh</Button>
       </div>
 
+      {/* Bulk controls + active-numbers monitor toggle */}
+      <div className="flex items-center gap-2 flex-wrap rounded-xl border border-white/10 bg-black/20 p-2.5">
+        <span className="text-[10px] font-bold uppercase tracking-widest text-white/40 mr-1">Bulk</span>
+        <button onClick={() => bulk({ enabled: true }, "All pools enabled.")} disabled={bulking} className="px-2.5 py-1 rounded-lg text-[11px] font-bold cursor-pointer bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 flex items-center gap-1"><Power className="h-3 w-3" />Enable all</button>
+        <button onClick={() => bulk({ enabled: false }, "All pools disabled.")} disabled={bulking} className="px-2.5 py-1 rounded-lg text-[11px] font-bold cursor-pointer bg-red-500/15 text-red-300 border border-red-500/30 flex items-center gap-1"><PowerOff className="h-3 w-3" />Disable all</button>
+        <button onClick={() => bulk({ hidden: false }, "All pools visible to customers.")} disabled={bulking} className="px-2.5 py-1 rounded-lg text-[11px] font-bold cursor-pointer bg-black/30 text-white/60 border border-white/10 flex items-center gap-1"><Eye className="h-3 w-3" />Show all</button>
+        <button onClick={() => bulk({ hidden: true }, "All pools hidden from customers.")} disabled={bulking} className="px-2.5 py-1 rounded-lg text-[11px] font-bold cursor-pointer bg-amber-500/10 text-amber-300 border border-amber-500/25 flex items-center gap-1"><EyeOff className="h-3 w-3" />Hide all</button>
+        <div className="flex-1" />
+        <button onClick={() => setMonitorOpen((o) => !o)} className={`px-2.5 py-1 rounded-lg text-[11px] font-bold cursor-pointer flex items-center gap-1 border ${monitorOpen ? "bg-cyan-500/20 text-cyan-200 border-cyan-500/40" : "bg-black/30 text-white/60 border-white/10"}`}><ListChecks className="h-3 w-3" />Active numbers</button>
+      </div>
+
+      {/* Active-numbers monitor */}
+      {monitorOpen && (
+        <Card className="p-4 space-y-3">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="text-sm font-bold text-white flex items-center gap-2"><Phone className="h-4 w-4 text-cyan-400" /> Live Numbers Monitor <span className="text-[10px] text-white/30">(all users &amp; pools)</span></div>
+            <div className="flex items-center gap-1.5">
+              {["active", "pending", "completed", "cancelled", "all"].map((s) => (
+                <button key={s} onClick={() => setMonitorStatus(s)} className={`px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer capitalize ${monitorStatus === s ? "bg-cyan-500/20 text-cyan-200 border border-cyan-500/40" : "bg-black/30 text-white/50 border border-white/10"}`}>{s}</button>
+              ))}
+              <button onClick={() => loadMonitor(monitorStatus)} className="p-1 rounded cursor-pointer text-white/50 hover:text-white"><RefreshCw className="h-3.5 w-3.5" /></button>
+            </div>
+          </div>
+          {monitorLoading ? (
+            <div className="py-8 text-center text-purple-300/50 text-xs"><Loader2 className="h-5 w-5 animate-spin mx-auto mb-1" />Loading…</div>
+          ) : activeNumbers.length === 0 ? (
+            <div className="py-8 text-center text-purple-300/40 text-xs italic">No numbers in this state.</div>
+          ) : (
+            <div className="max-h-80 overflow-auto rounded-lg border border-white/5">
+              <table className="w-full text-[10.5px]">
+                <thead className="text-purple-300/50 sticky top-0 bg-[#1a1030]">
+                  <tr>
+                    <th className="text-left px-2 py-1.5">Number</th><th className="text-left px-2 py-1.5">Service</th>
+                    <th className="text-left px-2 py-1.5">Channel</th><th className="text-left px-2 py-1.5">Customer</th>
+                    <th className="text-left px-2 py-1.5">Cost</th><th className="text-left px-2 py-1.5">Status</th>
+                    <th className="text-right px-2 py-1.5">Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {activeNumbers.map((n) => (
+                    <tr key={n.id} className="border-t border-white/5 text-purple-200/80">
+                      <td className="px-2 py-1 font-mono whitespace-nowrap">{n.number || "—"}</td>
+                      <td className="px-2 py-1">{n.service}</td>
+                      <td className="px-2 py-1">{n.poolLabel || n.provider}</td>
+                      <td className="px-2 py-1 truncate max-w-[140px]" title={n.user_email}>{n.user_email || n.user_name || `#${n.user_id}`}</td>
+                      <td className="px-2 py-1 font-mono">₦{Number(n.cost || 0).toLocaleString()}</td>
+                      <td className={`px-2 py-1 font-bold ${n.status === "active" ? "text-emerald-400" : n.status === "pending" ? "text-amber-400" : n.status === "cancelled" ? "text-red-400" : "text-white/50"}`}>{n.status}</td>
+                      <td className="px-2 py-1 text-right">
+                        {(n.status === "active" || n.status === "pending") ? (
+                          <button onClick={() => forceCancel(n)} disabled={cancelling === n.id} className="px-2 py-0.5 rounded bg-red-500/15 text-red-300 border border-red-500/30 text-[10px] font-bold cursor-pointer inline-flex items-center gap-1">
+                            {cancelling === n.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <><Ban className="h-3 w-3" />Force-cancel</>}
+                          </button>
+                        ) : <span className="text-white/25">—</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
+      )}
+
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        {pools.map((pool) => {
+        {pools.map((pool, idx) => {
           const d = drafts[pool.id] || {};
           const h = health[pool.provider] || {};
           const bal = balances[pool.provider];
@@ -115,6 +258,10 @@ export default function SmsPoolsAdmin() {
                   </div>
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
+                  <div className="flex flex-col">
+                    <button onClick={() => move(pool.id, -1)} disabled={saving === pool.id || idx === 0} title="Move up (higher priority)" className="p-0.5 rounded cursor-pointer text-white/40 hover:text-cyan-300 disabled:opacity-20 disabled:cursor-not-allowed"><ArrowUp className="h-3 w-3" /></button>
+                    <button onClick={() => move(pool.id, 1)} disabled={saving === pool.id || idx === pools.length - 1} title="Move down (lower priority)" className="p-0.5 rounded cursor-pointer text-white/40 hover:text-cyan-300 disabled:opacity-20 disabled:cursor-not-allowed"><ArrowDown className="h-3 w-3" /></button>
+                  </div>
                   <button onClick={() => patch(pool.id, { enabled: !pool.enabled })} disabled={saving === pool.id}
                     title={pool.enabled ? "Disable pool" : "Enable pool"}
                     className={`px-2.5 py-1 rounded-lg text-[11px] font-bold cursor-pointer flex items-center gap-1 ${pool.enabled ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/30" : "bg-white/5 text-white/50 border border-white/10"}`}>
@@ -160,6 +307,21 @@ export default function SmsPoolsAdmin() {
                 <Field label="Cancel lock (minutes)" hint="Wait before Cancel appears">
                   <input type="number" value={Math.round((d.cancel_lock_seconds ?? 120) / 60)} onChange={(e) => setD("cancel_lock_seconds", Math.max(0, parseInt(e.target.value) || 0) * 60)} className={inp} />
                 </Field>
+              </div>
+
+              {/* API key (per pool / provider — every provider equal, including Grizzly) */}
+              <div className="rounded-lg border border-white/10 bg-black/20 p-2.5 space-y-1.5">
+                <label className="text-[10px] font-bold text-purple-200/60 uppercase tracking-wide flex items-center gap-1.5">
+                  <KeyRound className="h-3 w-3" /> {PROVIDERS.find((x) => x.id === pool.provider)?.label || pool.provider} API key
+                  {hasKey[pool.provider] ? <span className="text-emerald-400 normal-case">· set</span> : <span className="text-red-400 normal-case">· missing</span>}
+                </label>
+                <div className="flex items-center gap-2">
+                  <input type="password" placeholder="Enter to update…" autoComplete="off" value={keyDraft[pool.id] || ""} onChange={(e) => setKeyDraft((k) => ({ ...k, [pool.id]: e.target.value }))} className={inp} />
+                  <Button size="sm" onClick={() => saveKey(pool)} disabled={!(keyDraft[pool.id] || "").trim() || saving === pool.id} className="cursor-pointer text-[11px] shrink-0">
+                    <Save className="h-3.5 w-3.5 mr-1" />Save
+                  </Button>
+                </div>
+                <p className="text-[9px] text-white/30">Stored server-side, never shown back. Leave blank to keep the current key.</p>
               </div>
 
               {/* Actions */}

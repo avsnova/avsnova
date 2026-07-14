@@ -395,7 +395,7 @@ router.get('/numbers', async (req, res) => {
         id: r.id, number: r.number, country: r.country, flag: r.flag, service: r.service,
         status: r.status, cost: r.cost, otpReceived: r.otp_received || undefined, created_at: r.created_at,
         provider: prov,                     // internal only; UI should display poolLabel
-        poolLabel: poolByProvider[prov] || "Pool",  // masked customer-facing label
+        poolLabel: poolByProvider[prov] || "Channel",  // masked customer-facing label
         remaining,                          // seconds left
         providerTimer,                      // true = exact provider timer; false = estimated (no provider timer)
         expires_at: new Date(expiresMs).toISOString(),

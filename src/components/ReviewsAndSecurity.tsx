@@ -229,7 +229,7 @@ export default function ReviewsAndSecurity() {
             </div>
             <div className="flex items-center gap-2 mb-6">
               <Activity className="h-5 w-5 text-cyan-400 animate-pulse" />
-              <span className="text-xs font-bold text-white font-space uppercase tracking-wider">Secure Nodes Status</span>
+              <span className="text-xs font-bold text-white font-space uppercase tracking-wider">Secure Channels Status</span>
             </div>
 
             {/* Simulated Live Monitor */}
@@ -261,7 +261,7 @@ export default function ReviewsAndSecurity() {
                   </span>
                 </div>
                 <div className="flex justify-between items-center">
-                  <span className="text-purple-200/50">Carrier OTP Node</span>
+                  <span className="text-purple-200/50">Carrier OTP Channel</span>
                   <span className="text-emerald-400 font-bold uppercase flex items-center gap-1">
                     <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
                     Operational
@@ -280,7 +280,7 @@ export default function ReviewsAndSecurity() {
               <div className="flex items-center justify-between text-[9px] text-purple-200/30 pt-2 border-t border-purple-500/10 font-inter">
                 <span className="flex items-center gap-1">
                   <ShieldCheck className="h-3.5 w-3.5 text-cyan-400" />
-                  Enterprise Node Compliant
+                  Enterprise Channel Compliant
                 </span>
                 <span>Uptime SLA Guaranteed</span>
               </div>

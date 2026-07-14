@@ -930,7 +930,7 @@ export default function MarketplaceView({
                 } else if (pIdx === 1) {
                   label = "Access Password";
                 } else if (pIdx === 2) {
-                  label = "License Node Key";
+                  label = "License Channel Key";
                 } else if (pIdx === 3) {
                   label = "Security Matrix Code";
                 }
@@ -1566,7 +1566,7 @@ export default function MarketplaceView({
                 <span className="text-3xl p-3 bg-cyan-500/10 border border-cyan-500/20 rounded-2xl">📡</span>
                 <div>
                   <div className="flex items-center gap-1.5">
-                    <span className="text-[10px] text-cyan-400 font-mono font-bold uppercase tracking-wider block">Fulfillment Delivery Nodes</span>
+                    <span className="text-[10px] text-cyan-400 font-mono font-bold uppercase tracking-wider block">Fulfillment Delivery Channels</span>
                     <Badge variant="success">SECURE PROFILE</Badge>
                   </div>
                   <h3 className="text-xl font-bold font-space text-white">{viewedCredentialsOrder.name}</h3>
@@ -1601,7 +1601,7 @@ export default function MarketplaceView({
               {/* QR Code section (For eSIMs) */}
               {(viewedCredentialsOrder.esim_qr_code || viewedCredentialsOrder.esim_activation_code) && (
                 <div className="p-4 bg-cyan-950/15 border border-cyan-500/20 rounded-2xl space-y-4">
-                  <span className="font-bold text-cyan-400 font-space uppercase block border-b border-cyan-500/10 pb-1.5 text-xs">📶 eSIM ACTIVATION NODE DETAILS</span>
+                  <span className="font-bold text-cyan-400 font-space uppercase block border-b border-cyan-500/10 pb-1.5 text-xs">📶 eSIM ACTIVATION CHANNEL DETAILS</span>
                   
                   <div className="flex flex-col md:flex-row items-center gap-6 justify-center">
                     {viewedCredentialsOrder.esim_qr_code && (

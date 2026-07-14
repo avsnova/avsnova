@@ -178,7 +178,7 @@ export default function NotificationsView({ onRefreshNotificationsCount }: Notif
                     {n.message}
                   </p>
                   <div className="text-[10px] text-purple-200/40 font-mono pt-1">
-                    Event Source: AVS_NODE_{n.type.toUpperCase()}
+                    Event Source: AVS_CHANNEL_{n.type.toUpperCase()}
                   </div>
                 </div>
                 {n.is_read === 0 && (

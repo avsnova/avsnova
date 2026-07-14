@@ -95,12 +95,12 @@ export default function SettingsView() {
                   <p className="text-xs text-purple-200/50">Filter the automated logs delivered to your dashboard and inbox</p>
                 </div>
               </div>
-              <Badge variant="info">AVS Alert Node</Badge>
+              <Badge variant="info">AVS Alert Channel</Badge>
             </div>
 
             <div className="space-y-4 max-w-2xl">
               {[
-                { label: "AVS Service Updates & Operational Logs", desc: "Get instantly notified when API nodes undergo driver updates or capacity upgrades.", checked: notifService, onChange: (val: boolean) => setNotifService(val) },
+                { label: "AVS Service Updates & Operational Logs", desc: "Get instantly notified when API channels undergo driver updates or capacity upgrades.", checked: notifService, onChange: (val: boolean) => setNotifService(val) },
                 { label: "AVS Wallet Instant Deposit Confirmations", desc: "Receive immediate push receipts upon successful bank transfer or credit card wallet top-ups.", checked: notifPayment, onChange: (val: boolean) => setNotifPayment(val) },
                 { label: "Automated Line Refund Receipts", desc: "Receive automated ledger notifications when failed virtual number activations are automatically refunded to your AVS Wallet.", checked: notifRefund, onChange: (val: boolean) => setNotifRefund(val) },
                 { label: "Marketplace Flash Sales & Wholesale Discounts", desc: "Get early access notifications of exclusive digital keys, software license invitations, and eSIM campaigns.", checked: notifMarket, onChange: (val: boolean) => setNotifMarket(val) },

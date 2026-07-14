@@ -118,18 +118,25 @@ function friendlyError(msg: string) {
 
 type PurchaseStage = "idle" | "searching" | "reserved" | "failed";
 
-export default function SMSPanelView({ walletBalance, onRefreshNumbers, onAddNotification }: SMSPanelViewProps) {
+/**
+ * SMSPanelView — the customer SMS/virtual-number surface.
+ *
+ * The provider-independent "pools" architecture is now the ONE AND ONLY SMS experience.
+ * We ALWAYS render the new PoolBuyNumber panel and NEVER fall back to the legacy Grizzly UI.
+ * Enabling/disabling providers only changes which channels are offered inside the new panel —
+ * it never changes the interface. When no channel is available the new panel shows a
+ * professional "SMS services are currently unavailable" state (handled inside PoolBuyNumber),
+ * not the old structure. The legacy implementation is preserved below as `LegacySMSPanelView`
+ * for reference only and is intentionally never mounted (so its effects/fetches never run).
+ */
+export default function SMSPanelView({ walletBalance, onAddNotification }: SMSPanelViewProps) {
+  return <PoolBuyNumber walletBalance={walletBalance} onAddNotification={onAddNotification} />;
+}
+
+function LegacySMSPanelView({ walletBalance, onRefreshNumbers, onAddNotification }: SMSPanelViewProps) {
   const { toast } = useToast();
   const [balance, setBalance] = useState(walletBalance);
-  // Provider-independent "pools" mode: if an admin has enabled any customer-visible pool, use the
-  // new provider-based Buy Number experience. Otherwise fall back to the classic view (fully
-  // reversible — disabling all pools restores the old UI). Loading is null → brief neutral state.
-  const [poolsMode, setPoolsMode] = useState<null | boolean>(null);
-  useEffect(() => {
-    let alive = true;
-    apiFetch("/api/sms/pools").then((r) => { if (alive) setPoolsMode(!!(r && r.pools && r.pools.length > 0)); }).catch(() => { if (alive) setPoolsMode(false); });
-    return () => { alive = false; };
-  }, []);
+  const poolsMode = true;
 
   // Dynamic Catalog Paginated & Searchable States (Requirement 1, 2, 3!)
   const [countriesList, setCountriesList] = useState<any[]>([]);

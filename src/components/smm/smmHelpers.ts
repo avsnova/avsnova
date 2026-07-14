@@ -123,7 +123,7 @@ export function inputFieldFor(network: string, s?: SMMService): { fieldLabel: st
 
 export function cleanInstructions(s: SMMService): string {
   const text = s.instructions || s.description || "- Public profile only.\n- Do not change username during order.";
-  return text.replace(/JustAnotherPanel/gi, "Secure Carrier Node");
+  return text.replace(/JustAnotherPanel/gi, "Secure Carrier Channel");
 }
 
 // ————— Smart link validation (friendly, non-technical) —————

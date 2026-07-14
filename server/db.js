@@ -2175,6 +2175,13 @@ export const initDb = async () => {
   try { await dbRun("ALTER TABLE settings ADD COLUMN pop3_port INTEGER DEFAULT 995"); } catch (err) {}
   try { await dbRun("ALTER TABLE settings ADD COLUMN pop3_secure INTEGER DEFAULT 1"); } catch (err) {}
 
+  // ——— Customer Feedback popup — fully admin-controlled ———
+  try { await dbRun("ALTER TABLE settings ADD COLUMN feedback_enabled INTEGER DEFAULT 1"); } catch (err) {}          // master on/off for the feedback popup
+  try { await dbRun("ALTER TABLE settings ADD COLUMN feedback_delay_seconds INTEGER DEFAULT 4"); } catch (err) {}    // delay before the popup appears after a code is received
+  try { await dbRun("ALTER TABLE settings ADD COLUMN feedback_timeout_seconds INTEGER DEFAULT 0"); } catch (err) {}  // auto-dismiss after N seconds (0 = never auto-close)
+  try { await dbRun("ALTER TABLE settings ADD COLUMN feedback_required INTEGER DEFAULT 0"); } catch (err) {}         // 1 = customer cannot close without submitting (still one-per-order)
+  try { await dbRun("ALTER TABLE settings ADD COLUMN feedback_position TEXT DEFAULT 'bottom-left'"); } catch (err) {} // where the popup renders
+
   // One-time seed of email defaults FROM ENVIRONMENT into the settings table when the
   // SMTP host has never been configured. Values remain fully editable from the Admin
   // Dashboard afterwards — nothing is hardcoded in application logic.
@@ -2312,6 +2319,18 @@ export const initDb = async () => {
       rating INTEGER DEFAULT 0,
       comment TEXT DEFAULT '',
       created_at VARCHAR(255)
+    )
+  `);
+  // Persisted feedback dismissals — when a customer closes the popup for an order we remember it
+  // server-side so it NEVER shows again for that order (survives refresh, logout/login, revisits).
+  // The UNIQUE (user_id, order_id) pair makes each dismissal idempotent.
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS feedback_dismissals (
+      id INTEGER PRIMARY KEY AUTO_INCREMENT,
+      user_id INTEGER NOT NULL,
+      order_id VARCHAR(64) NOT NULL,
+      created_at VARCHAR(255),
+      UNIQUE(user_id, order_id)
     )
   `);
   // Custom settings — admin-defined key/value toggles/values beyond the built-in ones.

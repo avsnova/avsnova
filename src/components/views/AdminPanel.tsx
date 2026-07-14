@@ -2859,11 +2859,11 @@ export default function AdminPanel() {
             </Card>
 
             <Card className="p-5 bg-gradient-to-br from-[#140830] to-[#0c041f] border border-purple-500/20 text-center space-y-1">
-              <span className="text-purple-200/40 uppercase tracking-widest text-[10px] font-bold block font-space">Uptime & Node Server Uptime</span>
+              <span className="text-purple-200/40 uppercase tracking-widest text-[10px] font-bold block font-space">Uptime & Channel Server Uptime</span>
               <div className="text-2xl font-black text-emerald-400 font-space">
                 99.98%
               </div>
-              <span className="text-emerald-400 text-xs font-semibold">All nodes reporting healthy</span>
+              <span className="text-emerald-400 text-xs font-semibold">All channels reporting healthy</span>
             </Card>
           </div>
 
@@ -2952,7 +2952,7 @@ export default function AdminPanel() {
           <Card className="lg:col-span-8 space-y-4">
             <div className="border-b border-purple-500/15 pb-4">
               <h3 className="text-base sm:text-lg font-bold text-white font-space tracking-tight">Active API Gateway Providers</h3>
-              <p className="text-xs text-purple-200/50 mt-0.5">Continuous auto-failover monitor. Adjust parameters and drag node hierarchies</p>
+              <p className="text-xs text-purple-200/50 mt-0.5">Continuous auto-failover monitor. Adjust parameters and drag channel hierarchies</p>
             </div>
 
             <div className="space-y-4">
@@ -3019,11 +3019,11 @@ export default function AdminPanel() {
               </div>
               <div className="p-3 bg-black/40 border border-purple-500/10 rounded-xl space-y-1">
                 <span className="text-purple-400 font-bold block">Latency Threshold:</span>
-                <span>If connection timeout exceeds 5 seconds, switch network node immediately.</span>
+                <span>If connection timeout exceeds 5 seconds, switch network channel immediately.</span>
               </div>
               <div className="p-3 bg-black/40 border border-purple-500/10 rounded-xl space-y-1">
                 <span className="text-purple-400 font-bold block">Balance Guard:</span>
-                <span>If wholesale credit sinks below $5.00, flag provider and retry next node.</span>
+                <span>If wholesale credit sinks below $5.00, flag provider and retry next channel.</span>
               </div>
             </div>
           </Card>
@@ -3932,7 +3932,7 @@ export default function AdminPanel() {
               <Card className="p-6 space-y-4">
                 <div className="border-b border-purple-500/15 pb-4">
                   <h3 className="text-base sm:text-lg font-bold text-white font-space tracking-tight">🎁 International Gift Orders Log</h3>
-                  <p className="text-xs text-purple-200/50 mt-0.5">View and manage worldwide physical gift delivery nodes, addresses, and tracking details.</p>
+                  <p className="text-xs text-purple-200/50 mt-0.5">View and manage worldwide physical gift delivery channels, addresses, and tracking details.</p>
                 </div>
 
                 <div className="overflow-x-auto custom-scrollbar-thin">
@@ -4712,7 +4712,7 @@ export default function AdminPanel() {
                     {/* Complete history & logs box */}
                     <div className="p-3.5 bg-purple-950/10 border border-purple-500/10 rounded-2xl space-y-1">
                       <span className="text-[10px] text-purple-400 block font-bold uppercase font-space">📶 Live Sync Tracking Status</span>
-                      <p className="text-[11px] leading-relaxed text-purple-200">{activeFulfillOrder.details || "Awaiting submission to carrier node..."}</p>
+                      <p className="text-[11px] leading-relaxed text-purple-200">{activeFulfillOrder.details || "Awaiting submission to carrier channel..."}</p>
                     </div>
 
                     <div className="grid grid-cols-2 gap-2 text-[10px] text-purple-200/40 pt-1">
@@ -6194,7 +6194,7 @@ export default function AdminPanel() {
               </div>
 
               <div className="space-y-4">
-                <h4 className="font-bold text-white font-space uppercase border-b border-purple-500/10 pb-1.5">Activity & Shipping nodes</h4>
+                <h4 className="font-bold text-white font-space uppercase border-b border-purple-500/10 pb-1.5">Activity & Shipping channels</h4>
                 <div className="space-y-2">
                   <span className="text-purple-200/40 block font-space uppercase text-[9px] font-bold">Last Recorded Shipping Details:</span>
                   {(() => {

@@ -27,7 +27,7 @@ export default function SmsConfigCenter() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState<string | null>(null);
-  const [keys, setKeys] = useState<{ fivesim_api_key: string; smspool_api_key: string }>({ fivesim_api_key: "", smspool_api_key: "" });
+  const [keys, setKeys] = useState<{ grizzly_api_key: string; fivesim_api_key: string; smspool_api_key: string }>({ grizzly_api_key: "", fivesim_api_key: "", smspool_api_key: "" });
   const [logs, setLogs] = useState<any[]>([]);
   const [plan, setPlan] = useState<any>(null);
   const [planQ, setPlanQ] = useState({ country: "16", service: "tg" });
@@ -86,7 +86,7 @@ export default function SmsConfigCenter() {
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
           <h3 className="text-base sm:text-lg font-bold text-white font-space tracking-tight flex items-center gap-2"><Smartphone className="h-5 w-5 text-cyan-400" /> SMS Configuration</h3>
-          <p className="text-xs text-purple-200/50 mt-0.5">Providers, smart routing, API keys, balances, health &amp; logs — all in one place. Grizzly stays the default; new providers are opt-in.</p>
+          <p className="text-xs text-purple-200/50 mt-0.5">Providers, smart routing, API keys, balances, health &amp; logs — all in one place. Every provider is equal: enable, disable, prioritise or route to any of them freely.</p>
         </div>
         <Button variant="outline" size="sm" onClick={() => { load(); loadLogs(); }} className="cursor-pointer"><RefreshCw className="h-3.5 w-3.5 mr-1" /> Refresh</Button>
       </div>
@@ -134,9 +134,9 @@ export default function SmsConfigCenter() {
                   {online ? <Wifi className="h-4 w-4 text-emerald-400" /> : <WifiOff className="h-4 w-4 text-red-400" />}
                   {PROVIDER_LABELS[p]}
                 </div>
-                <button onClick={() => save({ enabled: { [p]: !enabled } })} disabled={saving || p === "grizzly"}
-                  title={p === "grizzly" ? "Grizzly is the default provider" : ""}
-                  className={`px-2 py-0.5 rounded-full text-[10px] font-bold cursor-pointer ${enabled ? "bg-emerald-500/20 text-emerald-300" : "bg-neutral-600/30 text-neutral-400"} ${p === "grizzly" ? "opacity-60 cursor-not-allowed" : ""}`}>
+                <button onClick={() => save({ enabled: { [p]: !enabled } })} disabled={saving}
+                  title={enabled ? "Disable this provider" : "Enable this provider"}
+                  className={`px-2 py-0.5 rounded-full text-[10px] font-bold cursor-pointer ${enabled ? "bg-emerald-500/20 text-emerald-300" : "bg-neutral-600/30 text-neutral-400"}`}>
                   {enabled ? "ENABLED" : "DISABLED"}
                 </button>
               </div>
@@ -161,8 +161,12 @@ export default function SmsConfigCenter() {
       {/* API keys (write-only) */}
       <Card className="p-4 space-y-3">
         <div className="text-sm font-bold text-white flex items-center gap-2"><KeyRound className="h-4 w-4 text-cyan-400" /> API Keys</div>
-        <p className="text-[11px] text-purple-300/50">Keys are stored server-side and never shown back. Leave blank to keep the current value. Grizzly's key is managed in the existing settings.</p>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <p className="text-[11px] text-purple-300/50">Keys are stored server-side and never shown back. Leave blank to keep the current value. Every provider's key can be managed here.</p>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div>
+            <label className="text-[11px] text-purple-300/60">Grizzly SMS API key {data.hasKey?.grizzly && <span className="text-emerald-400">(set)</span>}</label>
+            <Input type="password" placeholder="Enter to update…" value={keys.grizzly_api_key} onChange={(e) => setKeys((k) => ({ ...k, grizzly_api_key: e.target.value }))} autoComplete="off" />
+          </div>
           <div>
             <label className="text-[11px] text-purple-300/60">5SIM API key {data.hasKey?.fivesim && <span className="text-emerald-400">(set)</span>}</label>
             <Input type="password" placeholder="Enter to update…" value={keys.fivesim_api_key} onChange={(e) => setKeys((k) => ({ ...k, fivesim_api_key: e.target.value }))} autoComplete="off" />
@@ -172,7 +176,7 @@ export default function SmsConfigCenter() {
             <Input type="password" placeholder="Enter to update…" value={keys.smspool_api_key} onChange={(e) => setKeys((k) => ({ ...k, smspool_api_key: e.target.value }))} autoComplete="off" />
           </div>
         </div>
-        <Button size="sm" disabled={saving || (!keys.fivesim_api_key && !keys.smspool_api_key)} onClick={async () => { await save({ ...(keys.fivesim_api_key ? { fivesim_api_key: keys.fivesim_api_key } : {}), ...(keys.smspool_api_key ? { smspool_api_key: keys.smspool_api_key } : {}) }); setKeys({ fivesim_api_key: "", smspool_api_key: "" }); }} className="cursor-pointer">
+        <Button size="sm" disabled={saving || (!keys.grizzly_api_key && !keys.fivesim_api_key && !keys.smspool_api_key)} onClick={async () => { await save({ ...(keys.grizzly_api_key ? { grizzly_api_key: keys.grizzly_api_key } : {}), ...(keys.fivesim_api_key ? { fivesim_api_key: keys.fivesim_api_key } : {}), ...(keys.smspool_api_key ? { smspool_api_key: keys.smspool_api_key } : {}) }); setKeys({ grizzly_api_key: "", fivesim_api_key: "", smspool_api_key: "" }); }} className="cursor-pointer">
           <Save className="h-3.5 w-3.5 mr-1" /> Save keys
         </Button>
       </Card>
@@ -180,7 +184,7 @@ export default function SmsConfigCenter() {
       {/* Route-plan preview */}
       <Card className="p-4 space-y-3">
         <div className="text-sm font-bold text-white flex items-center gap-2"><Route className="h-4 w-4 text-purple-400" /> Route Plan Preview</div>
-        <p className="text-[11px] text-purple-300/50">See which provider the engine would pick for a country + service (Grizzly codes, e.g. country 16 = UK, service tg = Telegram).</p>
+        <p className="text-[11px] text-purple-300/50">See which provider the engine would pick for a country + service (use the primary provider's codes, e.g. country 16 = UK, service tg = Telegram).</p>
         <div className="flex flex-wrap items-end gap-2">
           <div><label className="text-[10px] text-purple-300/50 block">Country code</label><Input value={planQ.country} onChange={(e) => setPlanQ((q) => ({ ...q, country: e.target.value }))} className="max-w-[110px]" /></div>
           <div><label className="text-[10px] text-purple-300/50 block">Service code</label><Input value={planQ.service} onChange={(e) => setPlanQ((q) => ({ ...q, service: e.target.value }))} className="max-w-[110px]" /></div>

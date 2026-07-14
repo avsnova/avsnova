@@ -122,7 +122,7 @@ export default function DashboardLayout({
               Platform Status: 100% Operational
             </span>
             <span>·</span>
-            <span>PCI-DSS Compliant Secure Node</span>
+            <span>PCI-DSS Compliant Secure Channel</span>
           </div>
         </footer>
       </main>

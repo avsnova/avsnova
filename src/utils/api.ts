@@ -135,7 +135,7 @@ export const apiFetch = async (endpoint: string, options: RequestInit = {}) => {
       headers,
     });
   } catch (networkError: any) {
-    console.error("[Aurevashop Production Node] Network connection failed:", networkError.message);
+    console.error("[Aurevashop Production Channel] Network connection failed:", networkError.message);
     throw new Error("Service temporarily unavailable. Please verify your internet connection or try again.");
   }
 

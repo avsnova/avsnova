@@ -173,7 +173,7 @@ export default function TransactionsView({ transactions = [] }: TransactionsView
         <div className="flex items-center justify-between pt-4 border-t border-purple-500/10 text-xs text-purple-200/50">
           <span className="flex items-center gap-1 text-emerald-400 font-semibold">
             <ShieldCheck className="h-4 w-4" />
-            PCI-DSS Ledger Nodes
+            PCI-DSS Ledger Channels
           </span>
           <span>Showing {filteredTx.length} items</span>
         </div>

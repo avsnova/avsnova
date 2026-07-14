@@ -363,7 +363,7 @@ export default function Sidebar({
                 <div className="absolute top-0 right-0 w-16 h-16 bg-gradient-to-br from-cyan-500/10 to-purple-500/10 rounded-full blur-xl pointer-events-none" />
                 <div className="flex items-center gap-1.5 font-bold text-white font-space">
                   <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  <span>AVS Secure Node</span>
+                  <span>AVS Secure Channel</span>
                 </div>
                 <p className="text-[11px] text-purple-200/60 leading-relaxed">
                   Enterprise digital access and activations.

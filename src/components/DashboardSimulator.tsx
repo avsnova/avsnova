@@ -661,7 +661,7 @@ export default function DashboardSimulator({ initialTab = 3, userName = "Guest" 
                     {isOtpRequesting ? (
                       <>
                         <RefreshCw className="h-4 w-4 animate-spin" />
-                        <span>Allocating Virtual Node...</span>
+                        <span>Allocating Virtual Channel...</span>
                       </>
                     ) : (
                       <>
@@ -679,7 +679,7 @@ export default function DashboardSimulator({ initialTab = 3, userName = "Guest" 
                   {!virtualNumber && !isOtpRequesting && (
                     <div className="flex-1 flex flex-col items-center justify-center text-center space-y-2 font-inter">
                       <Smartphone className="h-8 w-8 text-cyan-400/30 animate-pulse" />
-                      <p className="text-xs font-semibold text-purple-200/50">Node Standby</p>
+                      <p className="text-xs font-semibold text-purple-200/50">Channel Standby</p>
                       <p className="text-[10px] text-purple-200/30 max-w-[220px]">Choose country & service, then click Generate to allocate a dedicated secure line.</p>
                     </div>
                   )}
@@ -847,7 +847,7 @@ export default function DashboardSimulator({ initialTab = 3, userName = "Guest" 
                     Analytics Monitor
                   </div>
                   <div className="space-y-4">
-                    <div className="text-xs text-purple-200/40 uppercase font-space tracking-wider">Simulated Target Node</div>
+                    <div className="text-xs text-purple-200/40 uppercase font-space tracking-wider">Simulated Target Channel</div>
                     
                     {/* Growth Counter Visualizer */}
                     <div className="grid grid-cols-2 gap-3">
@@ -871,7 +871,7 @@ export default function DashboardSimulator({ initialTab = 3, userName = "Guest" 
                         <div className="flex justify-between items-center text-[10px] text-purple-200/60 font-semibold">
                           <span className="flex items-center gap-1">
                             <span className="h-1.5 w-1.5 rounded-full bg-cyan-400 animate-ping" />
-                            Pumping active nodes...
+                            Pumping active channels...
                           </span>
                           <span>{Math.round(((smmProgressCount - 1240) / (smmTargetCount - 1240)) * 100)}%</span>
                         </div>
@@ -887,7 +887,7 @@ export default function DashboardSimulator({ initialTab = 3, userName = "Guest" 
                     {!isSmmBoosting && smmTargetCount > 1240 && (
                       <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/20 p-2.5 text-center text-[11px] font-semibold text-emerald-400 flex items-center justify-center gap-1.5">
                         <CheckCircle2 className="h-4 w-4" />
-                        <span>Campaign successfully delivered to target node!</span>
+                        <span>Campaign successfully delivered to target channel!</span>
                       </div>
                     )}
                   </div>
@@ -1012,7 +1012,7 @@ export default function DashboardSimulator({ initialTab = 3, userName = "Guest" 
             </div>
             <div className="flex items-center gap-1 text-[10px] text-purple-200/40 font-semibold">
               <span className="h-2 w-2 rounded-full bg-purple-500"></span>
-              <span>Node Layer: TLS 1.3</span>
+              <span>Channel Layer: TLS 1.3</span>
             </div>
           </div>
           <div className="flex items-center gap-2">

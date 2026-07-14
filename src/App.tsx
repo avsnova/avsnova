@@ -717,7 +717,7 @@ export default function App() {
           <div className="mt-6 flex items-center justify-center gap-4 text-[10px] md:text-xs text-purple-200/40 font-mono uppercase tracking-wider">
             <span className="flex items-center gap-1"><ShieldCheck className="h-4 w-4 text-emerald-500" /> No Card Required</span>
             <span>·</span>
-            <span>100% Secure Node</span>
+            <span>100% Secure Channel</span>
           </div>
         </header>
 

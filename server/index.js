@@ -4583,8 +4583,10 @@ app.post("/api/admin/sms/providers", authenticateToken, async (req, res) => {
     if (b.mode !== undefined && ["single", "auto"].includes(b.mode)) setCol("sms_provider_mode", b.mode);
     if (b.strategy !== undefined && (b.strategy === "" || smsProviderRouter.STRATEGIES.includes(b.strategy))) setCol("sms_routing_strategy", b.strategy);
     // Keys: only overwrite when a non-empty value is provided (so the UI can send blanks safely).
+    // All providers are equal — each key can be managed here, including Grizzly.
     if (b.fivesim_api_key) setCol("fivesim_api_key", String(b.fivesim_api_key).trim());
     if (b.smspool_api_key) setCol("smspool_api_key", String(b.smspool_api_key).trim());
+    if (b.grizzly_api_key) setCol("grizzly_api_key", String(b.grizzly_api_key).trim());
     if (!sets.length) return res.json({ success: true, message: "No changes." });
     params.push(row.id);
     await dbRun(`UPDATE settings SET ${sets.join(", ")} WHERE id = ?`, params);
@@ -4708,6 +4710,39 @@ app.get("/api/admin/sms/pools", authenticateToken, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ——— Admin: Bulk enable/disable ALL pools at once (every provider treated equally).
+//     NOTE: this MUST be declared before the "/pools/:poolId" param route below, otherwise
+//     Express would match "bulk"/"reorder" as a :poolId. ———
+app.post("/api/admin/sms/pools/bulk", authenticateToken, async (req, res) => {
+  if (!isUserAdmin(req.user)) return res.status(403).json({ error: "Access denied." });
+  const b = req.body || {};
+  try {
+    const sets = [], p = [];
+    if (b.enabled !== undefined) { sets.push("enabled = ?"); p.push(b.enabled ? 1 : 0); }
+    if (b.hidden !== undefined) { sets.push("hidden = ?"); p.push(b.hidden ? 1 : 0); }
+    if (!sets.length) return res.status(400).json({ error: "Nothing to change." });
+    sets.push("updated_at = ?"); p.push(new Date().toISOString());
+    await dbRun(`UPDATE sms_pools SET ${sets.join(", ")}`, p);
+    await logAuditAction(req.user.id, req.user.username || req.user.email, `Bulk updated ALL SMS pools (${sets.map(s => s.split(" =")[0]).join(",")})`, req.ip);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ——— Admin: Reorder pools (drag-to-prioritise). Body: { order: ["pool2","pool1","pool3"] } ———
+app.post("/api/admin/sms/pools/reorder", authenticateToken, async (req, res) => {
+  if (!isUserAdmin(req.user)) return res.status(403).json({ error: "Access denied." });
+  const order = (req.body && req.body.order) || [];
+  if (!Array.isArray(order) || !order.length) return res.status(400).json({ error: "order array is required." });
+  try {
+    const now = new Date().toISOString();
+    for (let i = 0; i < order.length; i++) {
+      await dbRun("UPDATE sms_pools SET sort_order = ?, updated_at = ? WHERE id = ?", [i + 1, now, String(order[i])]);
+    }
+    await logAuditAction(req.user.id, req.user.username || req.user.email, `Reordered SMS pools: ${order.join(" > ")}`, req.ip);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.post("/api/admin/sms/pools/:poolId", authenticateToken, async (req, res) => {
   if (!isUserAdmin(req.user)) return res.status(403).json({ error: "Access denied." });
   const b = req.body || {};
@@ -4747,6 +4782,76 @@ app.post("/api/admin/sms/pools/:poolId/test", authenticateToken, async (req, res
     } catch (e) {
       res.json({ success: true, connected: false, error: e.message, latencyMs: Date.now() - t0, provider: pool.provider });
     }
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ——— Admin: Live active-numbers monitor across ALL users & pools ———
+app.get("/api/admin/sms/active-numbers", authenticateToken, async (req, res) => {
+  if (!isUserAdmin(req.user)) return res.status(403).json({ error: "Access denied." });
+  try {
+    const status = String(req.query.status || "active");
+    const allowed = ["active", "pending", "completed", "cancelled", "all"];
+    const where = allowed.includes(status) && status !== "all" ? "WHERE vn.status = ?" : "";
+    const params = where ? [status] : [];
+    const rows = await dbAll(
+      `SELECT vn.id, vn.user_id, vn.number, vn.country, vn.service, vn.status, vn.cost,
+              vn.otp_received, vn.expires_at, vn.created_at, vn.provider, vn.provider_order_id,
+              vn.provider_session_id, u.email AS user_email, u.username AS user_name
+         FROM virtual_numbers vn
+         LEFT JOIN users u ON u.id = vn.user_id
+         ${where}
+         ORDER BY vn.created_at DESC LIMIT 200`, params
+    );
+    // Attach the neutral pool label for each provider so admins see the customer-facing name too.
+    const pools = await smsPools.getAllPools();
+    const labelByProvider = {};
+    pools.forEach((p) => { if (!(p.provider in labelByProvider)) labelByProvider[p.provider] = p.label; });
+    const out = rows.map((r) => ({ ...r, poolLabel: labelByProvider[r.provider] || null }));
+    res.json({ success: true, numbers: out });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ——— Admin: Force-cancel a number (provider-first) + refund the customer's wallet ———
+app.post("/api/admin/sms/active-numbers/:id/force-cancel", authenticateToken, async (req, res) => {
+  if (!isUserAdmin(req.user)) return res.status(403).json({ error: "Access denied." });
+  try {
+    const line = await dbGet("SELECT * FROM virtual_numbers WHERE id = ?", [req.params.id]);
+    if (!line) return res.status(404).json({ error: "Number not found." });
+    if (line.status !== "active" && line.status !== "pending") {
+      return res.status(409).json({ error: `Cannot cancel a number in '${line.status}' state.` });
+    }
+    // Provider is the source of truth: try to release it upstream first (admins bypass cancel-lock).
+    let providerReleased = false, providerError = null;
+    try {
+      const pool = await smsPools.getPool(
+        (await dbGet("SELECT id FROM sms_pools WHERE provider = ? ORDER BY sort_order ASC LIMIT 1", [line.provider]))?.id
+      );
+      const sessionId = line.provider_session_id || line.provider_order_id;
+      if (pool && sessionId) { await smsPools.poolCancel(pool, sessionId, line.user_id); providerReleased = true; }
+    } catch (e) { providerError = e.message; }
+    // Mark cancelled locally regardless (admin override), then refund the customer.
+    await dbRun("UPDATE virtual_numbers SET status = 'cancelled' WHERE id = ?", [req.params.id]);
+    // Idempotent refund: claim it by inserting a REFUND transaction with a UNIQUE reference FIRST
+    // (so a retried admin click can never double-credit), then apply the atomic wallet credit.
+    let refunded = false;
+    const amt = Math.round(line.cost || 0);
+    if (amt > 0 && line.user_id) {
+      const ref = `ADMIN-CANCEL-${line.id}`;
+      const txId = `TX-${Date.now().toString().slice(-6)}-${Math.floor(100 + Math.random() * 900)}`;
+      const now = new Date().toISOString();
+      try {
+        await dbRun(
+          "INSERT INTO transactions (id, user_id, reference, amount, status, type, category, description, profit, cost, created_at, updated_at) VALUES (?, ?, ?, ?, 'completed', 'REFUND', 'SMS Panel', ?, 0, 0, ?, ?)",
+          [txId, line.user_id, ref, amt, `Admin force-cancel refund for ${line.number || line.id}`, now, now]
+        );
+        await dbRun("UPDATE users SET wallet_balance = wallet_balance + ? WHERE id = ?", [amt, line.user_id]);
+        refunded = true;
+      } catch (e) {
+        if (!/UNIQUE|constraint/i.test(e.message || "")) throw e; // already refunded → skip credit
+      }
+    }
+    await logAuditAction(req.user.id, req.user.username || req.user.email, `Force-cancelled SMS number ${line.id} (provider=${line.provider}, released=${providerReleased}, refunded=${refunded})`, req.ip);
+    res.json({ success: true, providerReleased, providerError, refunded });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -6582,17 +6687,83 @@ app.post("/api/feedback", authenticateToken, async (req, res) => {
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-// Which delivered orders still need feedback (drives the post-purchase prompt).
+// Public (customer) feedback popup configuration — drives whether/when the popup shows.
+async function getFeedbackConfig() {
+  const r = (await dbGet(
+    "SELECT feedback_enabled, feedback_delay_seconds, feedback_timeout_seconds, feedback_required, feedback_position FROM settings LIMIT 1"
+  ).catch(() => null)) || {};
+  return {
+    enabled: r.feedback_enabled === undefined ? true : r.feedback_enabled !== 0,
+    delaySeconds: Math.max(0, Math.min(120, parseInt(r.feedback_delay_seconds) || 0) || 4),
+    timeoutSeconds: Math.max(0, Math.min(600, parseInt(r.feedback_timeout_seconds) || 0)),
+    required: r.feedback_required === 1,
+    position: ["bottom-left", "bottom-right", "top-left", "top-right", "center"].includes(r.feedback_position) ? r.feedback_position : "bottom-left",
+  };
+}
+app.get("/api/feedback/config", authenticateToken, async (req, res) => {
+  try { res.json({ success: true, config: await getFeedbackConfig() }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Which SMS order still needs feedback (drives the post-purchase prompt).
+// REQUIREMENT: only trigger after an SMS code has been SUCCESSFULLY received — never before
+// purchase, while waiting, or for cancelled/expired/no-code orders. We also NEVER return an
+// order the customer has already rated OR dismissed (dismissals persist server-side).
 app.get("/api/feedback/pending", authenticateToken, async (req, res) => {
   try {
+    const cfg = await getFeedbackConfig();
+    if (!cfg.enabled) return res.json({ success: true, pending: null, config: cfg });
     const row = await dbGet(
-      `SELECT o.id, o.name, o.product_id FROM orders o
-       WHERE o.user_id = ? AND o.status IN ('delivered','completed')
-         AND NOT EXISTS (SELECT 1 FROM purchase_feedback f WHERE f.order_id = o.id AND f.user_id = o.user_id)
-       ORDER BY o.updated_at DESC LIMIT 1`,
+      `SELECT vn.id AS id, vn.service AS name, vn.service AS product_id, vn.number AS number, vn.provider AS provider
+         FROM virtual_numbers vn
+        WHERE vn.user_id = ?
+          AND vn.otp_received IS NOT NULL AND vn.otp_received != ''
+          AND vn.status IN ('completed','active','completed_archived')
+          AND NOT EXISTS (SELECT 1 FROM purchase_feedback f WHERE f.order_id = vn.id AND f.user_id = vn.user_id)
+          AND NOT EXISTS (SELECT 1 FROM feedback_dismissals d WHERE d.order_id = vn.id AND d.user_id = vn.user_id)
+        ORDER BY vn.created_at DESC LIMIT 1`,
       [req.user.id]
     );
-    res.json({ success: true, pending: row || null });
+    res.json({ success: true, pending: row || null, config: cfg });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Persist a feedback dismissal so the popup never reappears for this order.
+app.post("/api/feedback/dismiss", authenticateToken, async (req, res) => {
+  const orderId = String((req.body && req.body.order_id) || "").trim();
+  if (!orderId) return res.status(400).json({ error: "order_id is required." });
+  try {
+    await dbRun(
+      "INSERT INTO feedback_dismissals (user_id, order_id, created_at) VALUES (?, ?, ?) ON CONFLICT(user_id, order_id) DO NOTHING",
+      [req.user.id, orderId, new Date().toISOString()]
+    );
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ——— Admin: Feedback popup configuration ———
+app.get("/api/admin/feedback-config", authenticateToken, async (req, res) => {
+  if (!isUserAdmin(req.user)) return res.status(403).json({ error: "Access denied." });
+  try { res.json({ success: true, config: await getFeedbackConfig() }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+app.post("/api/admin/feedback-config", authenticateToken, async (req, res) => {
+  if (!isUserAdmin(req.user)) return res.status(403).json({ error: "Access denied." });
+  const b = req.body || {};
+  try {
+    const row = await dbGet("SELECT id FROM settings LIMIT 1");
+    if (!row) return res.status(500).json({ error: "Settings row missing." });
+    const sets = [], p = [];
+    if (b.enabled !== undefined) { sets.push("feedback_enabled = ?"); p.push(b.enabled ? 1 : 0); }
+    if (b.delaySeconds !== undefined && !isNaN(parseInt(b.delaySeconds))) { sets.push("feedback_delay_seconds = ?"); p.push(Math.max(0, Math.min(120, parseInt(b.delaySeconds)))); }
+    if (b.timeoutSeconds !== undefined && !isNaN(parseInt(b.timeoutSeconds))) { sets.push("feedback_timeout_seconds = ?"); p.push(Math.max(0, Math.min(600, parseInt(b.timeoutSeconds)))); }
+    if (b.required !== undefined) { sets.push("feedback_required = ?"); p.push(b.required ? 1 : 0); }
+    if (b.position !== undefined && ["bottom-left", "bottom-right", "top-left", "top-right", "center"].includes(b.position)) { sets.push("feedback_position = ?"); p.push(b.position); }
+    if (!sets.length) return res.json({ success: true, message: "No changes." });
+    p.push(row.id);
+    await dbRun(`UPDATE settings SET ${sets.join(", ")} WHERE id = ?`, p);
+    await logAuditAction(req.user.id, req.user.username || req.user.email, `Updated feedback popup config (${sets.map(s => s.split(" =")[0]).join(",")})`, req.ip);
+    res.json({ success: true, config: await getFeedbackConfig() });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
