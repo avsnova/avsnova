@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import jwt from "jsonwebtoken";
+import bcrypt from "bcryptjs";
 import dotenv from "dotenv";
 import fs from "fs";
 import path from "path";
@@ -54,12 +55,33 @@ if ((process.env.NODE_ENV || "development") === "production" && CORS_ORIGINS.len
 // Item 8: baseline security headers (dependency-free — equivalent to the core helmet set).
 // Applied to every response. HSTS only asserts when already served over HTTPS (behind the
 // TLS-terminating reverse proxy in production), so it never breaks local HTTP dev.
+// Content-Security-Policy. The frontend is a single-file bundle (inline script/style are
+// required by vite-plugin-singlefile), and it loads a few trusted third parties: Google Fonts,
+// Paystack + Flutterwave checkout scripts, the simpleicons CDN, and YouTube embeds. We allow
+// exactly those while still blocking object/embed injection, restricting base-uri, and (via
+// frame-ancestors) preventing the site from being framed for clickjacking.
+const CSP = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline' https://js.paystack.co https://checkout.flutterwave.com",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src 'self' data: https://fonts.gstatic.com",
+  "img-src 'self' data: blob: https:",
+  "media-src 'self' data: blob: https:",
+  "connect-src 'self' https:",
+  "frame-src 'self' https://checkout.flutterwave.com https://js.paystack.co https://www.youtube.com https://youtube.com",
+  "frame-ancestors 'none'",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+].join("; ");
+
 app.use((req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   res.setHeader("X-XSS-Protection", "0"); // modern browsers rely on CSP; explicit off avoids legacy bugs
   res.setHeader("Permissions-Policy", "geolocation=(), microphone=(), camera=()");
+  res.setHeader("Content-Security-Policy", CSP);
   if (req.headers["x-forwarded-proto"] === "https") {
     res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
   }
@@ -305,6 +327,34 @@ app.get("/api/health", async (req, res) => {
   };
   res.status(dbOk ? 200 : 503).json(payload);
 });
+
+// ─── Password hashing (bcrypt) with transparent legacy migration ───────────
+// Historically passwords were stored in plaintext. We now bcrypt-hash every new/changed
+// password. To avoid breaking existing accounts, `verifyPassword` also accepts a legacy
+// plaintext match and signals the caller to transparently re-hash it on successful login.
+const BCRYPT_ROUNDS = 12;
+
+async function hashPassword(plain) {
+  return bcrypt.hash(String(plain), BCRYPT_ROUNDS);
+}
+
+// A stored value is a bcrypt hash if it has the standard $2a/$2b/$2y prefix + 60-char length.
+function isBcryptHash(stored) {
+  return typeof stored === "string" && /^\$2[aby]\$\d{2}\$.{53}$/.test(stored);
+}
+
+// Returns { ok, needsRehash }. needsRehash=true means the stored value was legacy plaintext
+// that matched — the caller should re-save it as a hash.
+async function verifyPassword(plain, stored) {
+  if (stored == null) return { ok: false, needsRehash: false };
+  if (isBcryptHash(stored)) {
+    const ok = await bcrypt.compare(String(plain), stored);
+    return { ok, needsRehash: false };
+  }
+  // Legacy plaintext comparison (constant-effort). If it matches, flag for re-hash.
+  const ok = String(plain) === String(stored);
+  return { ok, needsRehash: ok };
+}
 
 // Authentication Middleware
 const isUserAdmin = (user) => {
@@ -1354,9 +1404,10 @@ app.post("/api/auth/register", async (req, res) => {
 
     const refCode = await genReferralCode(name);
     const nowRegIso = new Date().toISOString();
+    const passwordHash = await hashPassword(password);
     const result = await dbRun(
       "INSERT INTO users (email, password, name, wallet_balance, referral_code, phone, username, role, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'Customer', ?)",
-      [email, password, name, 0.0, refCode, phone || "", cleanUsername, nowRegIso]
+      [email, passwordHash, name, 0.0, refCode, phone || "", cleanUsername, nowRegIso]
     );
 
     const userId = result.lastID;
@@ -1470,8 +1521,14 @@ app.post("/api/auth/login", async (req, res) => {
 
   try {
     const user = await dbGet("SELECT * FROM users WHERE email = ?", [email]);
-    if (!user || user.password !== password) {
+    const pw = user ? await verifyPassword(password, user.password) : { ok: false, needsRehash: false };
+    if (!user || !pw.ok) {
       return res.status(400).json({ error: "Invalid email or password" });
+    }
+    // Transparently upgrade legacy plaintext passwords to bcrypt on successful login.
+    if (pw.needsRehash) {
+      try { await dbRun("UPDATE users SET password = ? WHERE id = ?", [await hashPassword(password), user.id]); }
+      catch (e) { /* non-fatal — login still succeeds */ }
     }
 
     // Track last login for user analytics (FEATURE 8)
@@ -1635,8 +1692,8 @@ app.post("/api/auth/reset-password", async (req, res) => {
       return res.status(400).json({ error: "This verification code has expired." });
     }
 
-    // Update password, clear the reset fields
-    await dbRun("UPDATE users SET password = ?, reset_code = NULL, reset_expires = NULL WHERE id = ?", [newPassword, user.id]);
+    // Update password (hashed), clear the reset fields
+    await dbRun("UPDATE users SET password = ?, reset_code = NULL, reset_expires = NULL WHERE id = ?", [await hashPassword(newPassword), user.id]);
 
     res.json({ success: true, message: "Your password has been reset successfully. You can now sign in with your new password." });
   } catch (err) {
@@ -1685,7 +1742,7 @@ app.post("/api/profile/update-password", authenticateToken, async (req, res) => 
       return res.status(400).json({ error: "Verification code has expired. Please request a new code." });
     }
 
-    await dbRun("UPDATE users SET password = ?, reset_code = NULL, reset_expires = NULL WHERE id = ?", [newPassword, req.user.id]);
+    await dbRun("UPDATE users SET password = ?, reset_code = NULL, reset_expires = NULL WHERE id = ?", [await hashPassword(newPassword), req.user.id]);
     await addNotification(req.user.id, "security", "Account password updated successfully.");
 
     res.json({ success: true, message: "Your account password has been updated successfully!" });
@@ -1708,7 +1765,8 @@ app.post("/api/profile/update", authenticateToken, async (req, res) => {
       if (!currentPassword) {
         return res.status(400).json({ error: "Changing email requires password confirmation." });
       }
-      if (user.password !== currentPassword) {
+      const pwChk = await verifyPassword(currentPassword, user.password);
+      if (!pwChk.ok) {
         return res.status(400).json({ error: "Incorrect password. Email update refused." });
       }
 
@@ -6021,7 +6079,7 @@ app.post("/api/admin/users/create", authenticateToken, async (req, res) => {
     const staffRefCode = await genReferralCode(name);
     await dbRun(
       "INSERT INTO users (username, email, password, name, wallet_balance, phone, role, referral_code) VALUES (?, ?, ?, ?, 0.0, ?, ?, ?)",
-      [username, email, password, name, phone || "", role || "Support Staff", staffRefCode]
+      [username, email, await hashPassword(password), name, phone || "", role || "Support Staff", staffRefCode]
     );
 
     await logAuditAction(req.user.id, req.user.username, `Created user profile for @${username}`, req.ip);
@@ -6072,6 +6130,10 @@ app.post("/api/admin/users/update/:id", authenticateToken, async (req, res) => {
     if (!user) return res.status(404).json({ error: "User not found." });
 
     // Requirement 2: admin can edit every field including username, role, and password.
+    // A newly-provided password is bcrypt-hashed; blank/absent means "leave unchanged".
+    const newPasswordValue = (password !== undefined && password)
+      ? await hashPassword(password)
+      : user.password;
     await dbRun(
       "UPDATE users SET name = ?, email = ?, phone = ?, username = ?, role = ?, password = ?, banned = ?, frozen = ? WHERE id = ?",
       [
@@ -6080,7 +6142,7 @@ app.post("/api/admin/users/update/:id", authenticateToken, async (req, res) => {
         phone !== undefined ? phone : user.phone,
         username !== undefined && username ? username : user.username,
         role !== undefined && role ? role : user.role,
-        password !== undefined && password ? password : user.password,
+        newPasswordValue,
         banned !== undefined ? banned : user.banned,
         frozen !== undefined ? frozen : user.frozen,
         req.params.id
