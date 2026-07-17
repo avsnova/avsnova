@@ -1,5 +1,11 @@
 # Aurevashop — Production Deployment Guide
 
+> 📌 **For the current, beginner-friendly, step-by-step deployment guide, see
+> [`docs/DEPLOYMENT_GUIDE.md`](docs/DEPLOYMENT_GUIDE.md)** (cPanel + Node.js + MySQL, domain/DNS/SSL,
+> env config, safe updates, rollback, and payment key setup). A full production-readiness report
+> is in [`docs/PRODUCTION_READINESS_FINAL_REPORT.md`](docs/PRODUCTION_READINESS_FINAL_REPORT.md).
+> The notes below are retained as background/reference.
+
 This guide covers deploying the AVS Marketplace to production. The stack is:
 - **Frontend:** React 19 + Vite, built to a single `dist/index.html` plus PWA assets in `dist/`.
 - **Backend:** Node/Express (`server/index.js`), SQLite (`database.sqlite`).
