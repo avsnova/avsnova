@@ -33,18 +33,35 @@ if (DB_TYPE === "mysql") {
   });
 }
 
-// Helper to run query in a promise
+// DDL (schema) statements can't run through mysql2's prepared-statement `execute()`; they must
+// use `query()`. This detects the schema verbs so dbRun can route them correctly on MySQL.
+const isDdl = (sql) => /^\s*(CREATE|ALTER|DROP|TRUNCATE|RENAME)\b/i.test(sql);
+
+// Helper to run query in a promise.
+// The result is normalized so callers can rely on `.lastID` and `.changes` regardless of the
+// underlying driver (SQLite exposes lastID/changes; MySQL exposes insertId/affectedRows).
 export const dbRun = (query, params = []) => {
   const finalQuery = translateSql(query);
   return new Promise((resolve, reject) => {
     if (DB_TYPE === "mysql") {
-      mysqlPool.execute(finalQuery, params)
-        .then(([result]) => resolve(result))
+      // DDL → query() (no prepared statement); parameterized DML → execute().
+      const runner = isDdl(finalQuery)
+        ? mysqlPool.query(finalQuery)
+        : mysqlPool.execute(finalQuery, params);
+      runner
+        .then(([result]) => resolve({
+          lastID: result && result.insertId,
+          changes: result && result.affectedRows,
+          insertId: result && result.insertId,
+          affectedRows: result && result.affectedRows,
+          raw: result,
+        }))
         .catch(err => reject(err));
     } else {
       sqliteDb.run(finalQuery, params, function (err) {
         if (err) reject(err);
-        else resolve(this);
+        // `this` carries lastID + changes; also expose MySQL-style aliases for symmetry.
+        else resolve({ lastID: this.lastID, changes: this.changes, insertId: this.lastID, affectedRows: this.changes });
       });
     }
   });
@@ -84,22 +101,57 @@ export const dbAll = (query, params = []) => {
   });
 };
 
-// Dialect Translator: dynamically maps SQL statements between SQLite and MySQL
+// ---------------------------------------------------------------------------
+// Dialect Translator: maps SQLite SQL (the source dialect used throughout the app)
+// to MySQL when DB_TYPE=mysql. Kept generic so new queries work without special-casing.
+//
+// Handled conversions (SQLite -> MySQL):
+//   • AUTOINCREMENT                     -> AUTO_INCREMENT
+//   • datetime('now')                   -> NOW()
+//   • INSERT OR IGNORE INTO ...         -> INSERT IGNORE INTO ...
+//   • INSERT OR REPLACE INTO ...        -> REPLACE INTO ...
+//   • INSERT ... ON CONFLICT(...) DO UPDATE SET a = excluded.a, ...
+//                                       -> INSERT ... ON DUPLICATE KEY UPDATE a = VALUES(a), ...
+//   • INSERT ... ON CONFLICT(...) DO NOTHING
+//                                       -> INSERT IGNORE ... (conflict target dropped)
+// The reverse (MySQL -> SQLite) only needs AUTO_INCREMENT -> AUTOINCREMENT.
+// ---------------------------------------------------------------------------
 function translateSql(query) {
-  if (DB_TYPE === "mysql") {
-    let q = query.replace(/AUTOINCREMENT/gi, "AUTO_INCREMENT");
-    q = q.replace(/datetime\('now'\)/gi, "NOW()");
-    if (q.includes("ON CONFLICT(provider) DO UPDATE")) {
-      q = q.replace(
-        "ON CONFLICT(provider) DO UPDATE SET balance = excluded.balance, last_checked = excluded.last_checked",
-        "ON DUPLICATE KEY UPDATE balance = VALUES(balance), last_checked = NOW()"
-      );
-    }
-    return q;
-  } else {
-    let q = query.replace(/AUTO_INCREMENT/gi, "AUTOINCREMENT");
-    return q;
+  if (DB_TYPE !== "mysql") {
+    // SQLite path: accept MySQL-style AUTO_INCREMENT written anywhere.
+    return query.replace(/AUTO_INCREMENT/gi, "AUTOINCREMENT");
   }
+
+  let q = query;
+
+  // Type/keyword fixes.
+  q = q.replace(/AUTOINCREMENT/gi, "AUTO_INCREMENT");
+  q = q.replace(/datetime\('now'\)/gi, "NOW()");
+  // MySQL cannot put a UNIQUE/index on a bare TEXT column without a key length. These columns
+  // hold short references, so VARCHAR(255) is the correct, index-friendly equivalent.
+  q = q.replace(/\bTEXT\s+UNIQUE\b/gi, "VARCHAR(255) UNIQUE");
+  // Older MySQL/MariaDB reject "CREATE INDEX IF NOT EXISTS". These are wrapped in try/catch at
+  // the call sites (re-running is harmless), so we drop the unsupported clause.
+  q = q.replace(/CREATE\s+(UNIQUE\s+)?INDEX\s+IF\s+NOT\s+EXISTS/gi, "CREATE $1INDEX");
+
+  // INSERT OR IGNORE / INSERT OR REPLACE  ->  INSERT IGNORE / REPLACE
+  q = q.replace(/INSERT\s+OR\s+IGNORE\s+INTO/gi, "INSERT IGNORE INTO");
+  q = q.replace(/INSERT\s+OR\s+REPLACE\s+INTO/gi, "REPLACE INTO");
+
+  // UPSERT: ON CONFLICT (...) DO NOTHING  ->  INSERT IGNORE (drop the conflict clause).
+  if (/ON\s+CONFLICT\s*\([^)]*\)\s*DO\s+NOTHING/is.test(q)) {
+    q = q.replace(/\s*ON\s+CONFLICT\s*\([^)]*\)\s*DO\s+NOTHING/is, "");
+    q = q.replace(/^(\s*)INSERT\s+INTO/i, "$1INSERT IGNORE INTO");
+  }
+
+  // UPSERT: ON CONFLICT (...) DO UPDATE SET <assignments>  ->  ON DUPLICATE KEY UPDATE <assignments>
+  // First rewrite every `excluded.col` reference to MySQL's `VALUES(col)`, then swap the clause head.
+  if (/ON\s+CONFLICT\s*\([^)]*\)\s*DO\s+UPDATE\s+SET/is.test(q)) {
+    q = q.replace(/\bexcluded\.([a-zA-Z_][a-zA-Z0-9_]*)/gi, "VALUES($1)");
+    q = q.replace(/ON\s+CONFLICT\s*\([^)]*\)\s*DO\s+UPDATE\s+SET/is, "ON DUPLICATE KEY UPDATE");
+  }
+
+  return q;
 }
 
 export const initDb = async () => {
@@ -129,7 +181,7 @@ export const initDb = async () => {
     )
   `);
 
-  if (DB_TYPE === "sqlite") {
+  if (true) { /* additive column migrations — run on ALL engines; try/catch ignores "duplicate column" */
     try { await dbRun("ALTER TABLE users ADD COLUMN username TEXT"); } catch (err) {}
     try { await dbRun("ALTER TABLE users ADD COLUMN reset_code TEXT"); } catch (err) {}
     try { await dbRun("ALTER TABLE users ADD COLUMN reset_expires INTEGER"); } catch (err) {}
@@ -255,7 +307,7 @@ export const initDb = async () => {
   // CURRENT proven behavior so nothing changes until an admin explicitly opts in.
   await dbRun(`
     CREATE TABLE IF NOT EXISTS feature_flags (
-      key VARCHAR(64) PRIMARY KEY,
+      \`key\` VARCHAR(64) PRIMARY KEY,
       enabled INTEGER DEFAULT 0,
       description TEXT,
       updated_at VARCHAR(255),
@@ -269,7 +321,7 @@ export const initDb = async () => {
     ["sms_mask_provider", 1, "Hide the upstream provider identity from customers (provider name/logo never exposed)."],
   ];
   for (const [k, en, desc] of DEFAULT_FLAGS) {
-    try { await dbRun("INSERT INTO feature_flags (key, enabled, description, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(key) DO UPDATE SET description = excluded.description", [k, en, desc, new Date().toISOString()]); } catch (err) {}
+    try { await dbRun("INSERT INTO feature_flags (`key`, enabled, description, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(`key`) DO UPDATE SET description = excluded.description", [k, en, desc, new Date().toISOString()]); } catch (err) {}
   }
 
   // SMS POOLS (provider-independent rebuild). Each pool = one real provider behind a neutral
@@ -425,7 +477,7 @@ export const initDb = async () => {
     )
   `);
 
-  if (DB_TYPE === "sqlite") {
+  if (true) { /* additive column migrations — run on ALL engines; try/catch ignores "duplicate column" */
     try { await dbRun("ALTER TABLE transactions ADD COLUMN payment_method TEXT"); } catch (err) {}
     // Profit/cost tracking for accurate revenue reporting (Requirement 7 & 12)
     try { await dbRun("ALTER TABLE transactions ADD COLUMN profit REAL DEFAULT 0"); } catch (err) {}
@@ -445,7 +497,7 @@ export const initDb = async () => {
     )
   `);
 
-  if (DB_TYPE === "sqlite") {
+  if (true) { /* additive column migrations — run on ALL engines; try/catch ignores "duplicate column" */
     try { await dbRun("ALTER TABLE categories ADD COLUMN icon TEXT"); } catch (err) {}
     try { await dbRun("ALTER TABLE categories ADD COLUMN banner TEXT"); } catch (err) {}
     try { await dbRun("ALTER TABLE categories ADD COLUMN order_index INTEGER DEFAULT 0"); } catch (err) {}
@@ -497,7 +549,7 @@ export const initDb = async () => {
     )
   `);
 
-  if (DB_TYPE === "sqlite") {
+  if (true) { /* additive column migrations — run on ALL engines; try/catch ignores "duplicate column" */
     try { await dbRun("ALTER TABLE services ADD COLUMN min_order INTEGER DEFAULT 100"); } catch (err) {}
     try { await dbRun("ALTER TABLE services ADD COLUMN max_order INTEGER DEFAULT 50000"); } catch (err) {}
     try { await dbRun("ALTER TABLE services ADD COLUMN refill_support INTEGER DEFAULT 0"); } catch (err) {}
@@ -538,7 +590,7 @@ export const initDb = async () => {
     )
   `);
 
-  if (DB_TYPE === "sqlite") {
+  if (true) { /* additive column migrations — run on ALL engines; try/catch ignores "duplicate column" */
     try { await dbRun("ALTER TABLE orders ADD COLUMN product_id TEXT"); } catch (err) {}
     try { await dbRun("ALTER TABLE orders ADD COLUMN service_id TEXT"); } catch (err) {}
     try { await dbRun("ALTER TABLE orders ADD COLUMN category TEXT"); } catch (err) {}
@@ -601,7 +653,7 @@ export const initDb = async () => {
     )
   `);
 
-  if (DB_TYPE === "sqlite") {
+  if (true) { /* additive column migrations — run on ALL engines; try/catch ignores "duplicate column" */
     try { await dbRun("ALTER TABLE products ADD COLUMN custom_fields TEXT"); } catch (err) {}
     try { await dbRun("ALTER TABLE products ADD COLUMN setup_guide TEXT"); } catch (err) {}
     try { await dbRun("ALTER TABLE products ADD COLUMN featured INTEGER DEFAULT 0"); } catch (err) {}
@@ -832,7 +884,7 @@ export const initDb = async () => {
     )
   `);
 
-  if (DB_TYPE === "sqlite") {
+  if (true) { /* additive column migrations — run on ALL engines; try/catch ignores "duplicate column" */
     try { await dbRun("ALTER TABLE support_messages ADD COLUMN is_internal INTEGER DEFAULT 0"); } catch (err) {}
     try { await dbRun("ALTER TABLE support_messages ADD COLUMN attachment_url TEXT"); } catch (err) {}
   }
@@ -863,7 +915,7 @@ export const initDb = async () => {
     )
   `);
   // Advanced Marketplace Banner columns (#11)
-  if (DB_TYPE === "sqlite") {
+  if (true) { /* additive column migrations — run on ALL engines; try/catch ignores "duplicate column" */
     try { await dbRun("ALTER TABLE banners ADD COLUMN banner_type TEXT DEFAULT 'image'"); } catch (err) {} // image | gif | video | html
     try { await dbRun("ALTER TABLE banners ADD COLUMN video_url TEXT"); } catch (err) {}
     try { await dbRun("ALTER TABLE banners ADD COLUMN html_content TEXT"); } catch (err) {}
@@ -1046,7 +1098,7 @@ export const initDb = async () => {
     )
   `);
   // A/B variant + video columns on announcements (#3, #11)
-  if (DB_TYPE === "sqlite") {
+  if (true) { /* additive column migrations — run on ALL engines; try/catch ignores "duplicate column" */
     try { await dbRun("ALTER TABLE announcements ADD COLUMN video_url TEXT"); } catch (err) {}
     try { await dbRun("ALTER TABLE announcements ADD COLUMN ab_enabled INTEGER DEFAULT 0"); } catch (err) {}
     try { await dbRun("ALTER TABLE announcements ADD COLUMN variant_b TEXT"); } catch (err) {}
@@ -1071,7 +1123,7 @@ export const initDb = async () => {
   `);
 
   // Additional columns on products & categories
-  if (DB_TYPE === "sqlite") {
+  if (true) { /* additive column migrations — run on ALL engines; try/catch ignores "duplicate column" */
     try { await dbRun("ALTER TABLE products ADD COLUMN multiple_images TEXT"); } catch (err) {}
     try { await dbRun("ALTER TABLE products ADD COLUMN specifications TEXT"); } catch (err) {}
     try { await dbRun("ALTER TABLE products ADD COLUMN status INTEGER DEFAULT 1"); } catch (err) {}
@@ -1446,7 +1498,7 @@ export const initDb = async () => {
   try { await dbRun("UPDATE sidebar_items SET label = 'Social Media Growth' WHERE id = 'SMM Panel' AND (label = 'SMM Panel' OR label IS NULL)"); } catch (err) {}
 
   // Recharge code expiry + redemption tracking (FEATURE 2)
-  if (DB_TYPE === "sqlite") {
+  if (true) { /* additive column migrations — run on ALL engines; try/catch ignores "duplicate column" */
     try { await dbRun("ALTER TABLE promo_codes ADD COLUMN redeemed_user_id INTEGER"); } catch (err) {}
     try { await dbRun("ALTER TABLE promo_codes ADD COLUMN redeemed_at TEXT"); } catch (err) {}
     try { await dbRun("ALTER TABLE promo_codes ADD COLUMN created_at TEXT"); } catch (err) {}

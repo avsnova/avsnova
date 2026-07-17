@@ -292,7 +292,7 @@ const enforcePriceFloor = (computedSell, providerCost, minProfit) => {
 // Setup SQLite database for tracking logs & users
 try {
   await initDb();
-  console.log("Production SQLite database initialized successfully.");
+  console.log(`Production database initialized successfully (${process.env.DB_TYPE === "mysql" ? "MySQL" : "SQLite"}).`);
   // Referral fix: guarantee every existing user has a unique referral code.
   await backfillReferralCodes();
   // Load dashboard-managed Telegram config (token/secret/categories/digest/severity).
