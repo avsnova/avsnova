@@ -3,6 +3,8 @@ import cors from "cors";
 import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
 import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 import crypto from "crypto";
 import nodemailer from "nodemailer";
 import { initDb, dbRun, dbGet, dbAll } from "./db.js";
@@ -25,7 +27,29 @@ import * as smsPools from "./services/sms/pools.js";
 dotenv.config();
 
 const app = express();
-app.use(cors());
+
+// Trust the reverse proxy (cPanel/Nginx/Apache/Cloudflare) so req.protocol, secure cookies,
+// x-forwarded-proto (HTTPS detection) and client IPs (rate limiting) are accurate in production.
+app.set("trust proxy", 1);
+
+// CORS: in production, lock the API to the domains listed in CORS_ORIGINS. When the frontend is
+// served by this same Node process (the standard cPanel setup) requests are same-origin and need
+// no CORS at all, so an empty list simply means "same-origin only". In development we stay open
+// so the Vite dev server (different port) can call the API.
+const CORS_ORIGINS = (process.env.CORS_ORIGINS || "")
+  .split(",").map((s) => s.trim()).filter(Boolean);
+if ((process.env.NODE_ENV || "development") === "production" && CORS_ORIGINS.length > 0) {
+  app.use(cors({
+    origin: (origin, cb) => {
+      // Allow same-origin/no-origin (curl, server-to-server, same-host fetches) and whitelisted domains.
+      if (!origin || CORS_ORIGINS.includes(origin)) return cb(null, true);
+      return cb(new Error("Not allowed by CORS"));
+    },
+    credentials: true,
+  }));
+} else {
+  app.use(cors());
+}
 
 // Item 8: baseline security headers (dependency-free — equivalent to the core helmet set).
 // Applied to every response. HSTS only asserts when already served over HTTPS (behind the
@@ -54,7 +78,22 @@ try { if (!fs.existsSync("./uploads")) fs.mkdirSync("./uploads", { recursive: tr
 app.use("/uploads", express.static("./uploads"));
 
 const PORT = process.env.PORT || 5000;
-const JWT_SECRET = process.env.JWT_SECRET || "super_secret_aureva_key";
+const NODE_ENV = process.env.NODE_ENV || "development";
+const IS_PROD = NODE_ENV === "production";
+
+// JWT secret MUST come from the environment in production. A weak/known fallback would let
+// anyone forge admin tokens, so we refuse to boot in production without a strong secret and
+// only allow a clearly-marked dev fallback outside production.
+const JWT_SECRET = (() => {
+  const s = process.env.JWT_SECRET;
+  if (s && s.length >= 32) return s;
+  if (IS_PROD) {
+    console.error("[FATAL] JWT_SECRET is missing or too weak (need >= 32 chars). Refusing to start in production.");
+    process.exit(1);
+  }
+  console.warn("[WARN] JWT_SECRET not set — using an INSECURE development-only fallback. Set JWT_SECRET before deploying.");
+  return "dev_only_insecure_secret_change_me_before_production_use";
+})();
 // Secrets are sourced from DB settings first, then environment. No hardcoded credentials.
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY || "";
 
@@ -12899,6 +12938,61 @@ app.get("/api/docs/:slug", async (req, res) => {
     }
     res.json({ success: true, doc: { slug: d.slug, title: d.title, category: d.category, body: d.body, icon: d.icon, updated_at: d.updated_at }, related });
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ---------------------------------------------------------------------------
+// Serve the built single-page frontend (production).
+//
+// In production the Node process is the ONLY server (e.g. cPanel Node app), so it must serve
+// the compiled React bundle in ./dist as well as the API. This block is a no-op in dev (Vite
+// serves the SPA on its own port and proxies /api here), and only activates when a build exists.
+//   • Static assets are served from ./dist with long-lived cache headers.
+//   • Any non-/api, non-/uploads GET falls through to index.html so client-side routing works.
+//   • Unknown /api/* routes still return a clean JSON 404 (never the HTML shell).
+// ---------------------------------------------------------------------------
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const DIST_DIR = path.resolve(__dirname, "..", "dist");
+const INDEX_HTML = path.join(DIST_DIR, "index.html");
+const hasBuild = fs.existsSync(INDEX_HTML);
+
+if (hasBuild) {
+  // Cache hashed assets aggressively; index.html is always revalidated so updates go live immediately.
+  app.use(express.static(DIST_DIR, {
+    index: false,
+    setHeaders: (res, filePath) => {
+      if (filePath.endsWith("index.html")) {
+        res.setHeader("Cache-Control", "no-cache");
+      } else {
+        res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+      }
+    },
+  }));
+  console.log(`[AVS] Serving production frontend from ${DIST_DIR}`);
+} else {
+  console.log("[AVS] No ./dist build found — API-only mode (run `npm run build` for production).");
+}
+
+// Unknown API routes → clean JSON 404 (must be declared before the SPA catch-all).
+app.use("/api", (req, res) => {
+  res.status(404).json({ error: "API endpoint not found." });
+});
+
+// SPA catch-all: any other GET returns the app shell so the client router can handle it.
+// Non-GET requests to unknown paths get a 404. Skips /uploads (handled by static above).
+if (hasBuild) {
+  app.get(/^\/(?!api\/|uploads\/).*/, (req, res, next) => {
+    if (req.method !== "GET") return next();
+    res.sendFile(INDEX_HTML, (err) => { if (err) next(err); });
+  });
+}
+
+// Express error-handling middleware — last line of defence so a thrown/next(err) never leaks
+// a stack trace to the client. Logs the real error server-side; returns a safe JSON message.
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  console.error("[express-error]", err && (err.stack || err.message || err));
+  const status = err && err.status && Number.isInteger(err.status) ? err.status : 500;
+  res.status(status).json({ error: status === 500 ? "An unexpected error occurred." : (err.message || "Request failed.") });
 });
 
 // Global process-level error hooks → Telegram system-error alert (throttled so a crash loop

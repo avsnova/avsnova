@@ -6,11 +6,14 @@
   "scripts": {
     "dev": "concurrently \"npm run server\" \"vite --host 0.0.0.0\"",
     "server": "node server/index.js",
+    "start": "node server/index.js",
     "migrate": "node server/migrations/runner.js up",
     "migrate:down": "node server/migrations/runner.js down",
     "migrate:status": "node server/migrations/runner.js status",
     "build": "vite build",
-    "preview": "vite preview"
+    "postbuild": "node -e \"process.stdout.write('Build complete. Frontend is in ./dist and will be served by the Node server in production.\\n')\"",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
