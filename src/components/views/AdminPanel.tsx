@@ -269,7 +269,6 @@ const ADMIN_NAV_SECTIONS: AdminNavSection[] = [
     id: "marketing", label: "Marketing", icon: Megaphone, items: [
       { label: "Announcements", tab: "announcements" },
       { label: "Banners", tab: "banners" },
-      { label: "Referral Program", tab: "referrals_admin" },
     ],
   },
   {
@@ -304,6 +303,11 @@ const ADMIN_NAV_SECTIONS: AdminNavSection[] = [
       { label: "Platform Settings", tab: "platform" },
       { label: "Checkout Fields", tab: "checkout_fields" },
       { label: "Settings Rollback", tab: "settings_rollback" },
+    ],
+  },
+  {
+    id: "referral", label: "Referral & Earnings", icon: Gift, items: [
+      { label: "Referral Program", tab: "referrals_admin" },
     ],
   },
 ];

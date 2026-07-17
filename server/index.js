@@ -734,7 +734,7 @@ async function refundWallet(userId, amount, reference, description) {
 }
 
 // --- EMAIL SERVICES (Nodemailer + Local log capturing) ---
-async function sendEmail({ to, subject, html, text, purpose }) {
+async function sendEmail({ to, subject, html, text, purpose, unsubscribeUrl }) {
   // Precedence: DB settings (admin-managed) → process.env fallback. Nothing hardcoded.
   let host = process.env.SMTP_HOST;
   let port = parseInt(process.env.SMTP_PORT || "587");
@@ -838,7 +838,11 @@ ${html}
           // Deliverability headers (Item 12): a valid List-Unsubscribe + Precedence header
           // and a stable From/Reply-To improve inbox placement and reduce spam scoring.
           headers: {
-            "List-Unsubscribe": "<mailto:support@avsnova.com?subject=unsubscribe>",
+            // Prefer a one-click HTTPS unsubscribe (RFC 8058) when provided; always include mailto.
+            "List-Unsubscribe": unsubscribeUrl
+              ? `<${unsubscribeUrl}>, <mailto:support@avsnova.com?subject=unsubscribe>`
+              : "<mailto:support@avsnova.com?subject=unsubscribe>",
+            ...(unsubscribeUrl ? { "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" } : {}),
             "X-Auto-Response-Suppress": "OOF, AutoReply",
           },
         });
@@ -936,6 +940,44 @@ function buildEmailSocial(social) {
   }).join("\n                        ");
 }
 
+// Whole NAV footer row — returns "" when there are no nav links (so nothing empty renders).
+function buildEmailNavSection(nav) {
+  const inner = buildEmailNav(nav);
+  if (!inner || !inner.trim()) return "";
+  return `<tr>
+                  <td align="center" style="padding:10px 30px 28px 30px;">
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        ${inner}
+                      </tr>
+                    </table>
+                  </td>
+                </tr>`;
+}
+
+// Whole SOCIAL footer row — returns "" when no social accounts are configured (section hidden).
+function buildEmailSocialSection(social) {
+  const inner = buildEmailSocial(social);
+  if (!inner || !inner.trim()) return "";
+  return `<tr>
+                  <td align="center" style="padding:16px 30px 12px 30px;">
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        ${inner}
+                      </tr>
+                    </table>
+                  </td>
+                </tr>`;
+}
+
+// Build a one-click unsubscribe link (token-signed so it works WITHOUT login and can't be forged).
+// Points at the public GET /api/unsubscribe endpoint which flips notif_market off for that user.
+function buildUnsubscribeLink(userId, email) {
+  const base = process.env.PUBLIC_URL || "https://avsnova.com";
+  const token = jwt.sign({ uid: userId, email, purpose: "unsubscribe" }, JWT_SECRET, { expiresIn: "180d" });
+  return `${base.replace(/\/$/, "")}/api/unsubscribe?token=${encodeURIComponent(token)}`;
+}
+
 function avsEmailTemplate({ heading, bodyHtml, footerNote, unsubscribeLink } = {}) {
   const year = new Date().getFullYear();
   const cfg = loadEmailConfig();
@@ -960,8 +1002,10 @@ function avsEmailTemplate({ heading, bodyHtml, footerNote, unsubscribeLink } = {
       privacy_url: cfg.privacy_url || "#",
       unsubscribe_link: safeUnsub,
       recipient_note: cfg.recipient_note || "",
-      nav_links: buildEmailNav(cfg.nav),
-      social_links: buildEmailSocial(cfg.social),
+      // Whole-section HTML: rendered only when there is content, otherwise an empty string so the
+      // footer never shows an empty nav row or a row of blank social icons.
+      nav_section: buildEmailNavSection(cfg.nav),
+      social_section: buildEmailSocialSection(cfg.social),
     };
     return tpl.replace(/\{\{\s*([a-z_]+)\s*\}\}/gi, (m, key) => (key in map ? map[key] : m));
   }
@@ -1809,6 +1853,21 @@ app.get("/api/profile/preferences", authenticateToken, async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ error: "Failed to load preferences: " + err.message });
+  }
+});
+
+// Public one-click unsubscribe (no login required). Validates a signed token and turns OFF
+// marketing emails for that user. Returns a simple, friendly confirmation page.
+app.get("/api/unsubscribe", async (req, res) => {
+  const token = String(req.query.token || "");
+  const page = (title, msg) => `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title></head><body style="margin:0;font-family:Arial,Helvetica,sans-serif;background:#0d0720;color:#e8e8f0;display:flex;min-height:100vh;align-items:center;justify-content:center;"><div style="max-width:460px;padding:32px;text-align:center;background:#160c2e;border:1px solid rgba(168,85,247,0.25);border-radius:16px;"><h1 style="font-size:20px;margin:0 0 12px;">${title}</h1><p style="font-size:14px;color:#b9a8e8;line-height:1.6;margin:0;">${msg}</p></div></body></html>`;
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    if (decoded.purpose !== "unsubscribe" || !decoded.uid) throw new Error("bad token");
+    await dbRun("UPDATE users SET notif_market = 0 WHERE id = ?", [decoded.uid]);
+    res.status(200).send(page("You're unsubscribed", "You will no longer receive marketing emails. You can re-enable them any time from your account notification preferences."));
+  } catch (e) {
+    res.status(400).send(page("Link invalid or expired", "This unsubscribe link is no longer valid. Please sign in and update your email preferences from your account settings."));
   }
 });
 
@@ -5049,7 +5108,7 @@ app.post("/api/admin/telegram/config", authenticateToken, async (req, res) => {
   const b = req.body || {};
   try {
     let row = await dbGet("SELECT id FROM settings LIMIT 1");
-    if (!row) { await dbRun("INSERT INTO settings (site_name) VALUES ('Aurevashop')"); row = await dbGet("SELECT id FROM settings LIMIT 1"); }
+    if (!row) { await dbRun("INSERT INTO settings (site_name) VALUES ('AUREVASHOP DIGITAL (AVS)')"); row = await dbGet("SELECT id FROM settings LIMIT 1"); }
     const sets = [], vals = [];
     if (b.enabled !== undefined) { sets.push("telegram_enabled = ?"); vals.push(b.enabled ? 1 : 0); }
     if (typeof b.botToken === "string" && b.botToken.trim()) { sets.push("telegram_bot_token = ?"); vals.push(b.botToken.trim()); }
@@ -5181,7 +5240,7 @@ app.post("/api/admin/referrals/config", authenticateToken, async (req, res) => {
   const b = req.body || {};
   try {
     let row = await dbGet("SELECT id FROM settings LIMIT 1");
-    if (!row) { await dbRun("INSERT INTO settings (site_name) VALUES ('Aurevashop')"); row = await dbGet("SELECT id FROM settings LIMIT 1"); }
+    if (!row) { await dbRun("INSERT INTO settings (site_name) VALUES ('AUREVASHOP DIGITAL (AVS)')"); row = await dbGet("SELECT id FROM settings LIMIT 1"); }
     const sets = [], vals = [];
     if (b.enabled !== undefined) { sets.push("referral_enabled = ?"); vals.push(b.enabled ? 1 : 0); }
     if (b.referrerBonus !== undefined && !isNaN(parseFloat(b.referrerBonus))) { sets.push("referral_referrer_bonus = ?"); vals.push(Math.max(0, parseFloat(b.referrerBonus))); }
@@ -5874,6 +5933,17 @@ app.post("/api/admin/backup/create", authenticateToken, async (req, res) => {
   if (!isUserAdmin(req.user)) return res.status(403).json({ error: "Access denied." });
 
   try {
+    // In production the DB is MySQL/MariaDB — a file copy does not apply. Backups are handled by
+    // the host's scheduled mysqldump (see docs/BACKUP_RESTORE_GUIDE.md). We return a clear message
+    // instead of pretending to copy a file that doesn't exist.
+    if ((process.env.DB_TYPE || "").toLowerCase() === "mysql" || (process.env.NODE_ENV === "production")) {
+      return res.json({
+        success: false,
+        mode: "mysql",
+        message: "This install uses MySQL. Use an automated mysqldump backup (see docs/BACKUP_RESTORE_GUIDE.md). File-copy backups only apply to local SQLite development.",
+      });
+    }
+
     if (!fs.existsSync("./backups")) {
       fs.mkdirSync("./backups");
     }
@@ -5882,7 +5952,7 @@ app.post("/api/admin/backup/create", authenticateToken, async (req, res) => {
     const filename = `database_backup_${timestamp}.sqlite`;
     const destPath = `./backups/${filename}`;
 
-    // Perform file copy for database copy backup
+    // Perform file copy (SQLite dev only)
     fs.copyFileSync("./database.sqlite", destPath);
 
     const statsFile = fs.statSync(destPath);
@@ -5915,12 +5985,20 @@ app.post("/api/admin/backup/restore", authenticateToken, async (req, res) => {
   const { filename } = req.body;
 
   try {
+    if ((process.env.DB_TYPE || "").toLowerCase() === "mysql" || (process.env.NODE_ENV === "production")) {
+      return res.json({
+        success: false,
+        mode: "mysql",
+        message: "This install uses MySQL. Restore from a mysqldump file via the host (see docs/BACKUP_RESTORE_GUIDE.md). File-copy restore only applies to local SQLite development.",
+      });
+    }
+
     const srcPath = `./backups/${filename}`;
     if (!fs.existsSync(srcPath)) {
       return res.status(404).json({ error: "Selected backup file not found." });
     }
 
-    // Safely copy back
+    // Safely copy back (SQLite dev only)
     fs.copyFileSync(srcPath, "./database.sqlite");
 
     await logAuditAction(req.user.id, req.user.username, `Restored database system to backup: ${filename}`, req.ip);
@@ -6505,25 +6583,29 @@ app.post("/api/admin/broadcast-email", authenticateToken, async (req, res) => {
   }
 
   try {
-    // Target audience: 'customers' (default) or 'all'
+    // Target audience: 'customers' (default) or 'all'. Marketing emails RESPECT the recipient's
+    // opt-out: only users who have not disabled marketing (notif_market != 0) are emailed.
     const rows = audience === "all"
-      ? await dbAll("SELECT email, name FROM users WHERE email IS NOT NULL AND email != ''")
-      : await dbAll("SELECT email, name FROM users WHERE role = 'Customer' AND email IS NOT NULL AND email != ''");
+      ? await dbAll("SELECT id, email, name FROM users WHERE email IS NOT NULL AND email != '' AND (notif_market IS NULL OR notif_market != 0)")
+      : await dbAll("SELECT id, email, name FROM users WHERE role = 'Customer' AND email IS NOT NULL AND email != '' AND (notif_market IS NULL OR notif_market != 0)");
 
-    if (!rows.length) return res.json({ success: true, sent: 0, failed: 0, message: "No recipients found." });
+    if (!rows.length) return res.json({ success: true, sent: 0, failed: 0, message: "No opted-in recipients found." });
 
-    // Build branded HTML once; body preserves line breaks from the composer.
-    const bodyHtml = String(message).replace(/\n/g, "<br/>");
-    const html = avsEmailTemplate({
-      heading: subject,
-      bodyHtml,
-      footerNote: "You are receiving this because you have an Aurevashop account."
-    });
+    const brandName = (await dbGet("SELECT site_name FROM settings LIMIT 1").catch(() => null))?.site_name || "AUREVASHOP DIGITAL (AVS)";
 
     let sent = 0, failed = 0, lastError = null;
-    // Send sequentially to respect SMTP rate limits; report aggregate result.
+    // Send sequentially to respect SMTP rate limits; report aggregate result. Each email carries a
+    // per-recipient one-click unsubscribe link (token-signed, works without login).
     for (const u of rows) {
-      const r = await sendEmail({ to: u.email, subject, html, text: String(message) });
+      const unsubLink = buildUnsubscribeLink(u.id, u.email);
+      const bodyHtml = String(message).replace(/\n/g, "<br/>");
+      const html = avsEmailTemplate({
+        heading: subject,
+        bodyHtml,
+        footerNote: `You are receiving this because you have a ${brandName} account.`,
+        unsubscribeLink: unsubLink,
+      });
+      const r = await sendEmail({ to: u.email, subject, html, text: String(message), unsubscribeUrl: unsubLink });
       if (r && r.success) sent++; else { failed++; lastError = r && r.error; }
     }
 
@@ -8207,7 +8289,7 @@ app.patch("/api/admin/settings", authenticateToken, async (req, res) => {
   if (keys.length === 0) return res.status(400).json({ error: "No valid settings to update." });
   try {
     let row = await dbGet("SELECT id FROM settings LIMIT 1");
-    if (!row) { await dbRun("INSERT INTO settings (site_name) VALUES ('Aurevashop')"); row = await dbGet("SELECT id FROM settings LIMIT 1"); }
+    if (!row) { await dbRun("INSERT INTO settings (site_name) VALUES ('AUREVASHOP DIGITAL (AVS)')"); row = await dbGet("SELECT id FROM settings LIMIT 1"); }
     for (const k of keys) {
       await dbRun(`UPDATE settings SET ${k} = ? WHERE id = ?`, [patch[k], row.id]);
     }
@@ -9405,7 +9487,7 @@ app.patch("/api/admin/email/settings", authenticateToken, async (req, res) => {
   if (applied.length === 0) return res.status(400).json({ error: "No valid settings to update." });
   try {
     let row = await dbGet("SELECT id FROM settings LIMIT 1");
-    if (!row) { await dbRun("INSERT INTO settings (site_name) VALUES ('Aurevashop')"); row = await dbGet("SELECT id FROM settings LIMIT 1"); }
+    if (!row) { await dbRun("INSERT INTO settings (site_name) VALUES ('AUREVASHOP DIGITAL (AVS)')"); row = await dbGet("SELECT id FROM settings LIMIT 1"); }
     for (const k of applied) await dbRun(`UPDATE settings SET ${k} = ? WHERE id = ?`, [patch[k], row.id]);
     await logAuditAction(req.user.id, req.user.username, `Updated email settings: ${applied.join(", ")}`, req.ip);
     await logEmailActivity({ action: "config_updated", detail: `Global email settings: ${applied.join(", ")}`, actor: req.user.username || req.user.email, ip: req.ip });

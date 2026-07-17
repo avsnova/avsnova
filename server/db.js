@@ -1,10 +1,24 @@
 import sqlite3 from "sqlite3";
 import mysql from "mysql2/promise";
+import bcrypt from "bcryptjs";
 import dotenv from "dotenv";
 
 dotenv.config();
 
-const DB_TYPE = process.env.DB_TYPE || "sqlite"; // 'sqlite' or 'mysql'
+// Production MUST use a real server database (MySQL/MariaDB). SQLite is a dev-only convenience.
+// If NODE_ENV=production and DB_TYPE isn't explicitly "sqlite", we require MySQL and refuse to
+// silently fall back to a file DB in production.
+const IS_PROD = (process.env.NODE_ENV || "development") === "production";
+let DB_TYPE = process.env.DB_TYPE || (IS_PROD ? "mysql" : "sqlite"); // 'sqlite' (dev) or 'mysql' (prod)
+
+if (IS_PROD && DB_TYPE === "sqlite") {
+  console.error("[FATAL] SQLite is not permitted in production. Set DB_TYPE=mysql and the MYSQL_* variables. Refusing to start.");
+  process.exit(1);
+}
+if (DB_TYPE === "mysql" && !process.env.MYSQL_DATABASE) {
+  console.error("[FATAL] DB_TYPE=mysql but MYSQL_DATABASE is not set. Configure MYSQL_HOST/USER/PASSWORD/DATABASE in .env.");
+  process.exit(1);
+}
 
 let sqliteDb = null;
 let mysqlPool = null;
@@ -2057,7 +2071,7 @@ export const initDb = async () => {
   // Seed Support Module defaults (Item 3) — only if empty
   const existContact = await dbGet("SELECT id FROM contact_methods LIMIT 1");
   if (!existContact) {
-    await dbRun("INSERT INTO contact_methods (id, label, value, type, icon, active, order_index) VALUES ('email', 'Email Support', 'hello@avslogs.org', 'email', 'Mail', 1, 1)");
+    await dbRun("INSERT INTO contact_methods (id, label, value, type, icon, active, order_index) VALUES ('email', 'Email Support', 'hello@avsnova.com', 'email', 'Mail', 1, 1)");
     await dbRun("INSERT INTO contact_methods (id, label, value, type, icon, active, order_index) VALUES ('whatsapp', 'WhatsApp', 'https://wa.me/2349016075160', 'link', 'MessageCircle', 1, 2)");
     await dbRun("INSERT INTO contact_methods (id, label, value, type, icon, active, order_index) VALUES ('telegram', 'Telegram Support', 'https://t.me/Avslog', 'link', 'Send', 1, 3)");
   }
@@ -2074,20 +2088,23 @@ export const initDb = async () => {
     await dbRun("INSERT INTO faqs (id, question, answer, active, order_index) VALUES ('f4', 'How do I get my purchased product credentials?', 'After purchase, go to My Inventory. Digital products deliver instantly; you can reveal and copy each credential securely.', 1, 4)");
   }
 
-  // ——— Item 1: migrate admin/support email to hello@avslogs.org (note the 's') ———
-  // Rename the predefined Super Admin login account so the operator logs in with the
-  // new address going forward. Safe & idempotent: only runs if the old address exists
-  // and the new one doesn't already.
+  // ——— Migrate the predefined Super Admin login to the current brand email (hello@avsnova.com) ———
+  // Moves the seeded admin account from any prior default address to the new one so the operator
+  // logs in with the correct email going forward. Safe & idempotent: only renames when the new
+  // address isn't already taken. Custom/non-admin emails are left untouched.
   try {
-    const oldAdmin = await dbGet("SELECT id FROM users WHERE email = 'hello@avslog.org'");
-    const newAdmin = await dbGet("SELECT id FROM users WHERE email = 'hello@avslogs.org'");
-    if (oldAdmin && !newAdmin) {
-      await dbRun("UPDATE users SET email = 'hello@avslogs.org' WHERE email = 'hello@avslog.org'");
-      console.log("[Migration] Super Admin login email migrated: hello@avslog.org → hello@avslogs.org");
+    const TARGET = process.env.SUPER_ADMIN_EMAIL || "hello@avsnova.com";
+    const newAdmin = await dbGet("SELECT id FROM users WHERE email = ?", [TARGET]);
+    if (!newAdmin) {
+      const legacyAdmin = await dbGet("SELECT id FROM users WHERE email IN ('hello@avslogs.org', 'hello@avslog.org') AND role = 'Super Admin' LIMIT 1");
+      if (legacyAdmin) {
+        await dbRun("UPDATE users SET email = ? WHERE id = ?", [TARGET, legacyAdmin.id]);
+        console.log(`[Migration] Super Admin login email migrated to ${TARGET}`);
+      }
     }
   } catch (err) { /* non-fatal */ }
-  // Fix the support contact method to the correct domain (avslogs.org).
-  try { await dbRun("UPDATE contact_methods SET value = 'hello@avslogs.org' WHERE id = 'email'"); } catch (err) {}
+  // Point the support contact method at the current brand support email.
+  try { await dbRun("UPDATE contact_methods SET value = ? WHERE id = 'email' AND value IN ('hello@avslogs.org', 'hello@avslog.org')", [process.env.SUPER_ADMIN_EMAIL || "hello@avsnova.com"]); } catch (err) {}
 
   // ——— Rebrand migration: AUREVASHOP DIGITAL (AVS) / avsnova.com ———
   // Only updates values that are still on a KNOWN OLD DEFAULT, so an operator's custom branding
@@ -2098,8 +2115,10 @@ export const initDb = async () => {
     await dbRun("UPDATE settings SET site_logo = '🛡️' WHERE site_logo IS NULL OR site_logo = ''");
   } catch (err) { /* non-fatal */ }
 
-  // Purge all users except our predefined Super Admin hello@avslogs.org (Requirement 4!)
-  await dbRun("DELETE FROM users WHERE email != 'hello@avslogs.org' AND email != 'hello@avslog.org'");
+  // NOTE: A previous dev-only line here purged all non-admin users on every boot. That is
+  // catastrophic in production (it would delete every real customer on restart), so it has been
+  // REMOVED. Customer data now persists across restarts. (To wipe demo data on a fresh install,
+  // do it manually/once — never automatically on boot.)
 
   // Seed default permissions for roles
   const existPerm = await dbGet("SELECT id FROM permissions LIMIT 1");
@@ -2127,9 +2146,9 @@ export const initDb = async () => {
       ["AUREVASHOP DIGITAL (AVS)", "+2349016075160", "https://avsnova.com", "🛡️", 0, "", "", "https://justanotherpanel.com/api/v2", "", "https://api.grizzlysms.com/stubs/handler_api.php"]
     );
   } else {
-    await dbRun("UPDATE settings SET paystack_public_key = ?, paystack_secret_key = ?, jap_api_url = ?, jap_api_key = ?, sms_api_url = 'https://api.grizzlysms.com/stubs/handler_api.php'", [
-      "pk_test_f6276d1abfe30c7c33b65c66ff69d7be0016d11e", "sk_test_fa56821810b4912b500e53c279ca333b8fb6f9d8", "https://justanotherpanel.com/api/v2", "cd1ad1a3244b6e8c6f989e69a76930ad"
-    ]);
+    // Only backfill non-secret default endpoints when missing. NEVER overwrite payment/API keys —
+    // those are managed via .env / the admin panel and must not be clobbered or hardcoded here.
+    await dbRun("UPDATE settings SET jap_api_url = COALESCE(NULLIF(jap_api_url, ''), 'https://justanotherpanel.com/api/v2'), sms_api_url = COALESCE(NULLIF(sms_api_url, ''), 'https://api.grizzlysms.com/stubs/handler_api.php')");
   }
 
   // ============================================================================
@@ -2264,7 +2283,7 @@ export const initDb = async () => {
   // Dashboard afterwards — nothing is hardcoded in application logic.
   try {
     let row = await dbGet("SELECT id, smtp_host FROM settings LIMIT 1");
-    if (!row) { await dbRun("INSERT INTO settings (site_name) VALUES ('Aurevashop')"); row = await dbGet("SELECT id, smtp_host FROM settings LIMIT 1"); }
+    if (!row) { await dbRun("INSERT INTO settings (site_name) VALUES ('AUREVASHOP DIGITAL (AVS)')"); row = await dbGet("SELECT id, smtp_host FROM settings LIMIT 1"); }
     if (row && (!row.smtp_host || row.smtp_host === "")) {
       const e = process.env;
       if (e.SMTP_HOST || e.SMTP_USER) {
@@ -2277,8 +2296,8 @@ export const initDb = async () => {
             e.SMTP_SECURE != null ? (parseInt(e.SMTP_SECURE) ? 1 : 0) : (parseInt(e.SMTP_PORT) === 465 ? 1 : 0),
             e.SMTP_USER || "",
             e.SMTP_PASS || "",
-            e.SMTP_FROM || (e.SMTP_USER ? `"${e.SMTP_SENDER_NAME || "Aurevashop Support"}" <${e.SMTP_USER}>` : ""),
-            e.SMTP_SENDER_NAME || "Aurevashop Support",
+            e.SMTP_FROM || (e.SMTP_USER ? `"${e.SMTP_SENDER_NAME || "AUREVASHOP DIGITAL (AVS)"}" <${e.SMTP_USER}>` : ""),
+            e.SMTP_SENDER_NAME || "AUREVASHOP DIGITAL (AVS)",
             e.IMAP_HOST || e.SMTP_HOST || "mail.spacemail.com",
             parseInt(e.IMAP_PORT) || 993,
             e.IMAP_SECURE != null ? (parseInt(e.IMAP_SECURE) ? 1 : 0) : 1,
@@ -2293,16 +2312,56 @@ export const initDb = async () => {
     }
   } catch (err) { console.error("[Email Service] Env→DB email seed skipped:", err.message); }
 
+  // Keep the persisted SMTP sender in sync with .env: if SMTP_USER is set in the environment and
+  // differs from what's stored, update the live sender fields (host/port/secure/user/pass/from/
+  // sender). This makes .env the reliable source of truth for outgoing mail — changing the SMTP
+  // credentials in .env and restarting updates the sender without any manual DB edits. Values
+  // stay editable in the Admin Dashboard afterwards.
+  try {
+    const e = process.env;
+    if (e.SMTP_USER) {
+      const cur = await dbGet("SELECT id, smtp_user FROM settings LIMIT 1");
+      if (cur && String(cur.smtp_user || "").toLowerCase() !== String(e.SMTP_USER).toLowerCase()) {
+        await dbRun(
+          "UPDATE settings SET smtp_host = ?, smtp_port = ?, smtp_secure = ?, smtp_user = ?, smtp_pass = ?, smtp_from = ?, smtp_sender_name = ?, email_enabled = 1 WHERE id = ?",
+          [
+            e.SMTP_HOST || "mail.spacemail.com",
+            parseInt(e.SMTP_PORT) || 465,
+            e.SMTP_SECURE != null ? (parseInt(e.SMTP_SECURE) ? 1 : 0) : (parseInt(e.SMTP_PORT) === 465 ? 1 : 0),
+            e.SMTP_USER,
+            e.SMTP_PASS || "",
+            e.SMTP_FROM || `"${e.SMTP_SENDER_NAME || "AUREVASHOP DIGITAL (AVS)"}" <${e.SMTP_USER}>`,
+            e.SMTP_SENDER_NAME || "AUREVASHOP DIGITAL (AVS)",
+            cur.id,
+          ]
+        );
+        console.log(`[Email Service] Synced persisted SMTP sender to ${e.SMTP_USER} from environment.`);
+      }
+    }
+  } catch (err) { console.error("[Email Service] SMTP env-sync skipped:", err.message); }
+
   // Migrate the persisted MAIN SMTP sender to hello@avslogs.org if it still points at the
   // retired bluewaveglobal account. The old account is repurposed for internal OTP testing.
   try {
     const s = await dbGet("SELECT id, smtp_user FROM settings LIMIT 1");
-    if (s && s.smtp_user && String(s.smtp_user).toLowerCase().includes("bluewaveglobal")) {
+    const e = process.env;
+    if (s && s.smtp_user && String(s.smtp_user).toLowerCase().includes("bluewaveglobal") && (e.SMTP_USER || e.SMTP_HOST)) {
       await dbRun(
-        "UPDATE settings SET smtp_host = 'mail.spacemail.com', smtp_port = 465, smtp_secure = 1, smtp_user = 'hello@avslogs.org', smtp_pass = 'Plan10.com', smtp_from = '\"Aurevashop Support\" <hello@avslogs.org>', smtp_sender_name = 'Aurevashop Support', imap_host = 'mail.spacemail.com', imap_port = 993, imap_secure = 1 WHERE id = ?",
-        [s.id]
+        "UPDATE settings SET smtp_host = ?, smtp_port = ?, smtp_secure = ?, smtp_user = ?, smtp_pass = ?, smtp_from = ?, smtp_sender_name = ?, imap_host = ?, imap_port = ?, imap_secure = 1 WHERE id = ?",
+        [
+          e.SMTP_HOST || "mail.spacemail.com",
+          parseInt(e.SMTP_PORT) || 465,
+          e.SMTP_SECURE != null ? (parseInt(e.SMTP_SECURE) ? 1 : 0) : 1,
+          e.SMTP_USER || "",
+          e.SMTP_PASS || "",
+          e.SMTP_FROM || (e.SMTP_USER ? `"${e.SMTP_SENDER_NAME || "AUREVASHOP DIGITAL (AVS)"}" <${e.SMTP_USER}>` : ""),
+          e.SMTP_SENDER_NAME || "AUREVASHOP DIGITAL (AVS)",
+          e.IMAP_HOST || e.SMTP_HOST || "mail.spacemail.com",
+          parseInt(e.IMAP_PORT) || 993,
+          s.id,
+        ]
       );
-      console.log("[Email Service] Migrated main SMTP sender → hello@avslogs.org (old bluewave creds retired to internal testing).");
+      console.log("[Email Service] Migrated main SMTP sender from the retired account using environment credentials.");
     }
   } catch (err) { console.error("[Email Service] Main SMTP migration skipped:", err.message); }
 
@@ -2334,7 +2393,7 @@ export const initDb = async () => {
     CREATE TABLE IF NOT EXISTS smtp_aliases (
       id INTEGER PRIMARY KEY AUTO_INCREMENT,
       label VARCHAR(255) NOT NULL,
-      from_name VARCHAR(255) DEFAULT 'Aurevashop',
+      from_name VARCHAR(255) DEFAULT 'AUREVASHOP DIGITAL (AVS)',
       from_email VARCHAR(255) NOT NULL,
       purpose VARCHAR(64) DEFAULT 'general',
       enabled INTEGER DEFAULT 1,
@@ -2347,9 +2406,9 @@ export const initDb = async () => {
     const anyAlias = await dbGet("SELECT id FROM smtp_aliases LIMIT 1");
     if (!anyAlias) {
       const now = new Date().toISOString();
-      await dbRun("INSERT INTO smtp_aliases (label, from_name, from_email, purpose, enabled, created_at, updated_at) VALUES ('Main Sender', 'Aurevashop Support', 'hello@avslogs.org', 'general', 1, ?, ?)", [now, now]);
-      await dbRun("INSERT INTO smtp_aliases (label, from_name, from_email, purpose, enabled, created_at, updated_at) VALUES ('Notifications', 'Aurevashop', 'hello@avslogs.org', 'notifications', 1, ?, ?)", [now, now]);
-      await dbRun("INSERT INTO smtp_aliases (label, from_name, from_email, purpose, enabled, created_at, updated_at) VALUES ('Marketing', 'Aurevashop', 'hello@avslogs.org', 'marketing', 1, ?, ?)", [now, now]);
+      await dbRun("INSERT INTO smtp_aliases (label, from_name, from_email, purpose, enabled, created_at, updated_at) VALUES ('Main Sender', 'AUREVASHOP DIGITAL (AVS)', 'hello@avsnova.com', 'general', 1, ?, ?)", [now, now]);
+      await dbRun("INSERT INTO smtp_aliases (label, from_name, from_email, purpose, enabled, created_at, updated_at) VALUES ('Notifications', 'AUREVASHOP DIGITAL (AVS)', 'hello@avsnova.com', 'notifications', 1, ?, ?)", [now, now]);
+      await dbRun("INSERT INTO smtp_aliases (label, from_name, from_email, purpose, enabled, created_at, updated_at) VALUES ('Marketing', 'AUREVASHOP DIGITAL (AVS)', 'hello@avsnova.com', 'marketing', 1, ?, ?)", [now, now]);
     }
   } catch (err) { /* non-fatal */ }
 
@@ -2570,23 +2629,42 @@ export const initDb = async () => {
   try { await dbRun("CREATE INDEX IF NOT EXISTS idx_smm_instructions_enabled ON smm_instructions(enabled, order_index)"); } catch (err) {}
   try { await dbRun("CREATE INDEX IF NOT EXISTS idx_sync_log_provider_kind ON sync_log(provider, kind, id)"); } catch (err) {}
 
-  // Seed single predefined Super Admin account (Requirement 4!)
-  const existingSuperAdmin = await dbGet("SELECT * FROM users WHERE email = ?", ["hello@avslogs.org"]);
+  // Seed single predefined Super Admin account. Check for ANY existing Super Admin (by role or the
+  // target/legacy emails) so we never create a duplicate on an existing database.
+  const existingSuperAdmin = await dbGet(
+    "SELECT * FROM users WHERE role = 'Super Admin' OR email IN (?, 'hello@avslogs.org', 'hello@avslog.org') LIMIT 1",
+    [process.env.SUPER_ADMIN_EMAIL || "hello@avsnova.com"]
+  );
   if (!existingSuperAdmin) {
-    await dbRun(
-      "INSERT INTO users (username, email, password, name, wallet_balance, role) VALUES (?, ?, ?, ?, ?, 'Super Admin')",
-      ["superadmin", "hello@avslogs.org", "Enter10ment.com", "Super Admin", 0.0]
-    );
-    console.log("Database Cleaned: Predefined Super Admin seeded at hello@avslogs.org / Enter10ment.com.");
+    // Super Admin credentials come from env (never hardcoded). Password is bcrypt-hashed at rest.
+    const adminEmail = process.env.SUPER_ADMIN_EMAIL || "hello@avsnova.com";
+    const adminPassword = process.env.SUPER_ADMIN_PASSWORD || "";
+    if (!adminPassword) {
+      console.warn("[Seed] SUPER_ADMIN_PASSWORD not set — skipping Super Admin seed. Set it in .env, then restart.");
+    } else {
+      const hashed = await bcrypt.hash(String(adminPassword), 12);
+      await dbRun(
+        "INSERT INTO users (username, email, password, name, wallet_balance, role) VALUES (?, ?, ?, ?, ?, 'Super Admin')",
+        ["superadmin", adminEmail, hashed, "Super Admin", 0.0]
+      );
+      console.log(`[Seed] Predefined Super Admin seeded at ${adminEmail} (password from env, hashed).`);
+    }
   }
 
   // ——— ASYNCHRONOUS LIVE SMM CATALOG BACKGROUND SEEDER ———
   setTimeout(async () => {
     console.log("[SMM Background Seeder] Initiating live JAP API sync on startup...");
     try {
-      const url = "https://justanotherpanel.com/api/v2";
+      // Credentials come from settings (admin panel) first, then env — NEVER hardcoded.
+      const cfgRow = await dbGet("SELECT jap_api_url, jap_api_key FROM settings LIMIT 1").catch(() => null);
+      const url = (cfgRow && cfgRow.jap_api_url) || process.env.JAP_API_URL || "https://justanotherpanel.com/api/v2";
+      const japKey = (cfgRow && cfgRow.jap_api_key) || process.env.JAP_API_KEY || "";
+      if (!japKey) {
+        console.log("[SMM Background Seeder] No JAP_API_KEY configured — skipping live sync (set it in .env or the admin panel).");
+        return;
+      }
       const form = new URLSearchParams();
-      form.append("key", "cd1ad1a3244b6e8c6f989e69a76930ad");
+      form.append("key", japKey);
       form.append("action", "services");
 
       const res = await fetch(url, { method: "POST", body: form });

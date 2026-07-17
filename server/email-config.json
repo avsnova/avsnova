@@ -1,30 +1,19 @@
 {
-  "_comment": "EDIT ME — all values below fill the email template placeholders. Change anything here; the server picks it up automatically (no restart needed). Nothing is hardcoded in server code.",
+  "_comment": "EDIT ME — all values below fill the email template placeholders. Change anything here; the server picks it up automatically (no restart needed). Nothing is hardcoded in server code. Leave 'nav' or 'social' empty ([] / {}) to hide those sections entirely.",
 
-  "brand": "AUREAVASHOP",
+  "brand": "AUREVASHOP DIGITAL (AVS)",
   "logo_letter": "A",
-  "tagline": "Luxury Redefined · Elegance Delivered",
-  "site_url": "https://aureavashop.com",
+  "tagline": "Trusted Digital Marketplace",
+  "site_url": "https://avsnova.com",
 
-  "nav": [
-    { "label": "Home", "url": "https://aureavashop.com" },
-    { "label": "Shop", "url": "https://aureavashop.com/shop" },
-    { "label": "Deals", "url": "https://aureavashop.com/deals" },
-    { "label": "Contact", "url": "https://aureavashop.com/contact" }
-  ],
+  "nav": [],
 
-  "contact_email": "hello@avslogs.org",
-  "contact_phone": "+1 (800) 555-0199",
+  "contact_email": "hello@avsnova.com",
 
-  "social": {
-    "facebook": "https://facebook.com/aureavashop",
-    "instagram": "https://instagram.com/aureavashop",
-    "x": "https://x.com/aureavashop",
-    "whatsapp": "https://wa.me/18005550199"
-  },
+  "social": {},
 
-  "privacy_url": "https://aureavashop.com/privacy",
-  "unsubscribe_url": "https://aureavashop.com/preferences",
+  "privacy_url": "https://avsnova.com/privacy",
+  "unsubscribe_url": "https://avsnova.com/preferences",
 
-  "recipient_note": "You received this email because you are a valued AUREAVASHOP customer."
+  "recipient_note": "You received this email because you are a valued AUREVASHOP DIGITAL (AVS) customer."
 }
