@@ -90,14 +90,27 @@ export async function getNativeServices(nativeCountry) {
   if (nativeCountry == null || nativeCountry === "") return [];
   const r = await post("/request/pricing", { country: nativeCountry }, { action: "native_services" });
   const arr = Array.isArray(r.json) ? r.json : [];
-  const out = arr.map((s) => ({
-    id: String(s.service), name: serviceDisplayName(s.service_name, s.service_name),
-    price: parseFloat(s.price) || 0,
-    // SMSPool /request/pricing lists only in-pool services; treat listed as available. Some
-    // responses include `available`/`amount` — surface it when present, else mark available.
-    stock: s.available != null ? Number(s.available) : (s.amount != null ? Number(s.amount) : 1),
-    successRate: s.success_rate != null ? Number(s.success_rate) : null,
-  })).filter((s) => s.price > 0);
+  // SMSPool's /request/pricing can list the SAME service id more than once (one row per
+  // pool/carrier). Deduplicate by service id, keeping the cheapest in-stock option and summing
+  // stock across pools — so each service appears EXACTLY ONCE in the customer catalog.
+  const byId = new Map();
+  for (const s of arr) {
+    const id = String(s.service);
+    const price = parseFloat(s.price) || 0;
+    if (!(price > 0)) continue;
+    const stock = s.available != null ? Number(s.available) : (s.amount != null ? Number(s.amount) : 1);
+    const successRate = s.success_rate != null ? Number(s.success_rate) : null;
+    const existing = byId.get(id);
+    if (!existing) {
+      byId.set(id, { id, name: serviceDisplayName(s.service_name, s.service_name), price, stock, successRate });
+    } else {
+      // Keep the lowest price; accumulate stock; prefer a defined success rate.
+      existing.price = Math.min(existing.price, price);
+      existing.stock = (Number(existing.stock) || 0) + (Number(stock) || 0);
+      if (existing.successRate == null && successRate != null) existing.successRate = successRate;
+    }
+  }
+  const out = Array.from(byId.values());
   out.sort((a, b) => a.name.localeCompare(b.name));
   return out;
 }

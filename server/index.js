@@ -6035,12 +6035,12 @@ app.post("/api/admin/backup/import-config", authenticateToken, async (req, res) 
     const row = await dbGet("SELECT id FROM settings LIMIT 1");
     if (!row) {
       await dbRun(
-        "INSERT INTO settings (site_name, whatsapp_number, external_support_url, site_logo, maintenance_mode, smm_multiplier, smm_flat_addition) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO settings (site_name, whatsapp_number, external_support_url, site_logo, maintenance_mode, smm_multiplier, smm_flat_addition) VALUES (?, ?, ?, ?, ?, ?, ?)",
         [site_name, whatsapp_number, external_support_url, site_logo, maintenance_mode, smm_multiplier, smm_flat_addition]
       );
     } else {
       await dbRun(
-        "UPDATE settings SET site_name = ?, whatsapp_number = ?, external_support_url = ?, site_logo = ?, maintenance_mode = ?, smm_multiplier = ?, smm_flat_addition = ? = ? WHERE id = ?",
+        "UPDATE settings SET site_name = ?, whatsapp_number = ?, external_support_url = ?, site_logo = ?, maintenance_mode = ?, smm_multiplier = ?, smm_flat_addition = ? WHERE id = ?",
         [site_name, whatsapp_number, external_support_url, site_logo, maintenance_mode, smm_multiplier, smm_flat_addition, row.id]
       );
     }
