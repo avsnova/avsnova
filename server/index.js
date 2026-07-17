@@ -23,6 +23,7 @@ import * as smsProviderRouter from "./services/sms/providerRouter.js";
 import * as smsHealth from "./services/sms/smsHealth.js";
 import * as featureFlags from "./services/featureFlags.js";
 import * as smsPools from "./services/sms/pools.js";
+import * as paymentRegistry from "./services/payments/registry.js";
 
 // Load environment variables
 dotenv.config();
@@ -5298,6 +5299,22 @@ app.post("/api/admin/payment-methods/toggle", authenticateToken, async (req, res
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// Admin: payment provider status overview (which gateways exist, are configured, sandbox vs live,
+// and which credential fields are set). Secrets are NEVER returned — only booleans. Drives an
+// at-a-glance readiness view and makes adding PalmPay/Nomba a config-only task.
+app.get("/api/admin/payments/providers", authenticateToken, async (req, res) => {
+  if (!isUserAdmin(req.user)) return res.status(403).json({ error: "Access denied." });
+  try {
+    const providers = await paymentRegistry.getProvidersStatus();
+    // Merge in the enable/disable state from payment_methods so the admin sees the full picture.
+    const methods = await dbAll("SELECT name, enabled FROM payment_methods").catch(() => []);
+    const enabledByName = {};
+    for (const m of methods) enabledByName[m.name] = m.enabled === 1;
+    const out = providers.map((p) => ({ ...p, enabled: enabledByName[p.methodName] ?? false }));
+    res.json({ success: true, providers: out });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // User Paga Persistent Payment Account Details & Manual Setup Fallback (Requirement 1 & Paga Integration)
