@@ -740,8 +740,8 @@ async function sendEmail({ to, subject, html, text, purpose }) {
   let port = parseInt(process.env.SMTP_PORT || "587");
   let user = process.env.SMTP_USER;
   let pass = process.env.SMTP_PASS;
-  let from = process.env.SMTP_FROM || `"Aurevashop Support" <hello@avslogs.org>`;
-  const replyTo = process.env.SMTP_REPLY_TO || "hello@avslogs.org";
+  let from = process.env.SMTP_FROM || `"AUREVASHOP DIGITAL (AVS) Support" <hello@avsnova.com>`;
+  const replyTo = process.env.SMTP_REPLY_TO || "support@avsnova.com";
   let secure = null;            // null → derive from port
   let senderName = null;
   let emailEnabled = true;
@@ -752,7 +752,7 @@ async function sendEmail({ to, subject, html, text, purpose }) {
   if (purpose) {
     try {
       const alias = await dbGet("SELECT from_name, from_email FROM smtp_aliases WHERE purpose = ? AND enabled = 1 ORDER BY id ASC LIMIT 1", [purpose]);
-      if (alias && alias.from_email) aliasFrom = `"${alias.from_name || "Aurevashop"}" <${alias.from_email}>`;
+      if (alias && alias.from_email) aliasFrom = `"${alias.from_name || "AUREVASHOP DIGITAL (AVS)"}" <${alias.from_email}>`;
     } catch (e) { /* fall back to default from */ }
   }
 
@@ -769,7 +769,7 @@ async function sendEmail({ to, subject, html, text, purpose }) {
         if (row.smtp_pass) pass = row.smtp_pass;
         senderName = row.smtp_sender_name || null;
         if (row.smtp_from) from = row.smtp_from;
-        else if (row.smtp_user) from = `"${senderName || "Aurevashop Support"}" <${row.smtp_user}>`;
+        else if (row.smtp_user) from = `"${senderName || "AUREVASHOP DIGITAL (AVS) Support"}" <${row.smtp_user}>`;
         if (row.smtp_secure === 1) secure = true;
         else if (row.smtp_secure === 0 && row.smtp_port) secure = false;
         console.log(`[Email Service] Loaded SMTP config from DB settings (host=${host}, port=${port}).`);
@@ -838,7 +838,7 @@ ${html}
           // Deliverability headers (Item 12): a valid List-Unsubscribe + Precedence header
           // and a stable From/Reply-To improve inbox placement and reduce spam scoring.
           headers: {
-            "List-Unsubscribe": "<mailto:hello@avslogs.org?subject=unsubscribe>",
+            "List-Unsubscribe": "<mailto:support@avsnova.com?subject=unsubscribe>",
             "X-Auto-Response-Suppress": "OOF, AutoReply",
           },
         });
@@ -939,9 +939,9 @@ function buildEmailSocial(social) {
 function avsEmailTemplate({ heading, bodyHtml, footerNote, unsubscribeLink } = {}) {
   const year = new Date().getFullYear();
   const cfg = loadEmailConfig();
-  const safeHeading = heading || cfg.brand || "Aureavashop";
+  const safeHeading = heading || cfg.brand || "AUREVASHOP DIGITAL (AVS)";
   const safeBody = bodyHtml || "";
-  const safeFooter = footerNote || "This is an automated message from " + (cfg.brand || "Aureavashop") + ".";
+  const safeFooter = footerNote || "This is an automated message from " + (cfg.brand || "AUREVASHOP DIGITAL (AVS)") + ".";
   const safeUnsub = unsubscribeLink || cfg.unsubscribe_url || (cfg.site_url ? cfg.site_url + "/preferences" : "#");
 
   const tpl = loadEmailTemplate();
@@ -951,11 +951,11 @@ function avsEmailTemplate({ heading, bodyHtml, footerNote, unsubscribeLink } = {
       body: safeBody,
       footer_note: safeFooter,
       year: String(year),
-      brand: cfg.brand || "Aureavashop",
+      brand: cfg.brand || "AUREVASHOP DIGITAL (AVS)",
       logo_letter: cfg.logo_letter || (cfg.brand ? cfg.brand.charAt(0) : "A"),
       tagline: cfg.tagline || "",
       site_url: cfg.site_url || "#",
-      contact_email: cfg.contact_email || "hello@avslogs.org",
+      contact_email: cfg.contact_email || "support@avsnova.com",
       contact_phone: cfg.contact_phone || "",
       privacy_url: cfg.privacy_url || "#",
       unsubscribe_link: safeUnsub,
@@ -967,8 +967,8 @@ function avsEmailTemplate({ heading, bodyHtml, footerNote, unsubscribeLink } = {
   }
 
   // Fallback (files missing) — minimal but functional wrapper.
-  const brand = cfg.brand || "AUREAVASHOP";
-  const email = cfg.contact_email || "hello@avslogs.org";
+  const brand = cfg.brand || "AUREVASHOP DIGITAL (AVS)";
+  const email = cfg.contact_email || "support@avsnova.com";
   return `<!doctype html>
 <html>
   <body style="margin:0;padding:0;background:#f4f4f7;font-family:Arial,Helvetica,sans-serif;">
@@ -7690,6 +7690,75 @@ app.delete("/api/admin/support-links/delete/:id", authenticateToken, async (req,
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// ——— SOCIAL LINKS MODULE — fully admin-managed footer/email social icons ———
+// Public: only ACTIVE links, ordered. When empty, the frontend hides the whole section.
+const SOCIAL_PLATFORMS = ["facebook", "instagram", "x", "tiktok", "linkedin", "youtube", "telegram", "whatsapp", "discord", "github", "custom"];
+
+app.get("/api/social-links", async (req, res) => {
+  try {
+    const links = await dbAll("SELECT id, platform, label, url, order_index FROM social_links WHERE active = 1 ORDER BY order_index ASC, id ASC");
+    res.json({ success: true, links });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Admin: full list incl. hidden.
+app.get("/api/admin/social-links", authenticateToken, async (req, res) => {
+  if (!isUserAdmin(req.user)) return res.status(403).json({ error: "Access denied." });
+  try {
+    const links = await dbAll("SELECT * FROM social_links ORDER BY order_index ASC, id ASC");
+    res.json({ success: true, links, platforms: SOCIAL_PLATFORMS });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Admin: create or update a social link.
+app.post("/api/admin/social-links", authenticateToken, async (req, res) => {
+  if (!isUserAdmin(req.user)) return res.status(403).json({ error: "Access denied." });
+  const b = req.body || {};
+  const platform = String(b.platform || "").toLowerCase().trim();
+  const url = String(b.url || "").trim();
+  if (!SOCIAL_PLATFORMS.includes(platform)) return res.status(400).json({ error: "Invalid platform." });
+  if (!url) return res.status(400).json({ error: "URL is required." });
+  // Basic URL sanity: must be http(s) (or a tel:/mailto: for custom).
+  if (!/^https?:\/\//i.test(url) && !(platform === "custom" && /^(mailto:|tel:)/i.test(url))) {
+    return res.status(400).json({ error: "URL must start with http:// or https://" });
+  }
+  try {
+    const now = new Date().toISOString();
+    const id = b.id && String(b.id).trim() ? String(b.id).trim() : `soc_${Date.now().toString(36)}_${Math.floor(Math.random() * 1e4)}`;
+    const label = String(b.label || "").slice(0, 64);
+    const active = b.active === undefined ? 1 : (b.active ? 1 : 0);
+    const orderIndex = Number.isFinite(parseInt(b.order_index)) ? parseInt(b.order_index) : 0;
+    await dbRun(
+      "INSERT INTO social_links (id, platform, label, url, active, order_index, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET platform=excluded.platform, label=excluded.label, url=excluded.url, active=excluded.active, order_index=excluded.order_index, updated_at=excluded.updated_at",
+      [id, platform, label, url, active, orderIndex, now, now]
+    );
+    await logAuditAction(req.user.id, req.user.username, `Saved social link (${platform})`, req.ip);
+    res.json({ success: true, id });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Admin: toggle visibility (hide/show without deleting).
+app.post("/api/admin/social-links/:id/toggle", authenticateToken, async (req, res) => {
+  if (!isUserAdmin(req.user)) return res.status(403).json({ error: "Access denied." });
+  try {
+    const row = await dbGet("SELECT active FROM social_links WHERE id = ?", [req.params.id]);
+    if (!row) return res.status(404).json({ error: "Link not found." });
+    const next = row.active === 1 ? 0 : 1;
+    await dbRun("UPDATE social_links SET active = ?, updated_at = ? WHERE id = ?", [next, new Date().toISOString(), req.params.id]);
+    res.json({ success: true, active: next });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Admin: delete a social link.
+app.delete("/api/admin/social-links/:id", authenticateToken, async (req, res) => {
+  if (!isUserAdmin(req.user)) return res.status(403).json({ error: "Access denied." });
+  try {
+    await dbRun("DELETE FROM social_links WHERE id = ?", [req.params.id]);
+    await logAuditAction(req.user.id, req.user.username, `Deleted social link ${req.params.id}`, req.ip);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ——— SUPPORT MODULE (Item 3): contact methods, community links, FAQs ———

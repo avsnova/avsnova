@@ -1009,6 +1009,22 @@ export const initDb = async () => {
       order_index INTEGER DEFAULT 0
     )
   `);
+  // Fully admin-managed social media links. Each row = one social/platform link the footer and
+  // emails render. `platform` is a known key (facebook, instagram, x, tiktok, linkedin, youtube,
+  // telegram, whatsapp, discord, github) or "custom". `active=0` hides a link without deleting it.
+  // When no active rows exist, the frontend hides the entire social section (no empty icons).
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS social_links (
+      id VARCHAR(255) PRIMARY KEY,
+      platform VARCHAR(32) NOT NULL,
+      label VARCHAR(255) DEFAULT '',
+      url TEXT NOT NULL,
+      active INTEGER DEFAULT 1,
+      order_index INTEGER DEFAULT 0,
+      created_at VARCHAR(255),
+      updated_at VARCHAR(255)
+    )
+  `);
   await dbRun(`
     CREATE TABLE IF NOT EXISTS community_links (
       id VARCHAR(255) PRIMARY KEY,
@@ -1211,9 +1227,9 @@ export const initDb = async () => {
   await dbRun(`
     CREATE TABLE IF NOT EXISTS settings (
       id INTEGER PRIMARY KEY AUTO_INCREMENT,
-      site_name VARCHAR(255) DEFAULT 'Aurevashop',
+      site_name VARCHAR(255) DEFAULT 'AUREVASHOP DIGITAL (AVS)',
       whatsapp_number VARCHAR(255) DEFAULT '+2349016075160',
-      external_support_url VARCHAR(255) DEFAULT 'https://avslogs.org',
+      external_support_url VARCHAR(255) DEFAULT 'https://avsnova.com',
       site_logo VARCHAR(255) DEFAULT '🛡️',
       maintenance_mode INTEGER DEFAULT 0,
       smm_multiplier REAL DEFAULT 1.35,
@@ -2073,6 +2089,15 @@ export const initDb = async () => {
   // Fix the support contact method to the correct domain (avslogs.org).
   try { await dbRun("UPDATE contact_methods SET value = 'hello@avslogs.org' WHERE id = 'email'"); } catch (err) {}
 
+  // ——— Rebrand migration: AUREVASHOP DIGITAL (AVS) / avsnova.com ———
+  // Only updates values that are still on a KNOWN OLD DEFAULT, so an operator's custom branding
+  // is never overwritten. Idempotent and safe to run on every boot.
+  try {
+    await dbRun("UPDATE settings SET site_name = 'AUREVASHOP DIGITAL (AVS)' WHERE site_name IS NULL OR site_name = '' OR site_name IN ('Aurevashop', 'Aureavashop', 'AVS Logs', 'AVSLogs')");
+    await dbRun("UPDATE settings SET external_support_url = 'https://avsnova.com' WHERE external_support_url IS NULL OR external_support_url = '' OR external_support_url IN ('https://avslogs.org', 'https://avslog.org', 'http://avslogs.org')");
+    await dbRun("UPDATE settings SET site_logo = '🛡️' WHERE site_logo IS NULL OR site_logo = ''");
+  } catch (err) { /* non-fatal */ }
+
   // Purge all users except our predefined Super Admin hello@avslogs.org (Requirement 4!)
   await dbRun("DELETE FROM users WHERE email != 'hello@avslogs.org' AND email != 'hello@avslog.org'");
 
@@ -2099,7 +2124,7 @@ export const initDb = async () => {
   if (!existingSettings) {
     await dbRun(
       "INSERT INTO settings (site_name, whatsapp_number, external_support_url, site_logo, maintenance_mode, paystack_public_key, paystack_secret_key, jap_api_url, jap_api_key, sms_api_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      ["Aurevashop", "+2349016075160", "https://avslogs.org", "🛡️", 0, "pk_test_f6276d1abfe30c7c33b65c66ff69d7be0016d11e", "sk_test_fa56821810b4912b500e53c279ca333b8fb6f9d8", "https://justanotherpanel.com/api/v2", "cd1ad1a3244b6e8c6f989e69a76930ad", "https://api.grizzlysms.com/stubs/handler_api.php"]
+      ["AUREVASHOP DIGITAL (AVS)", "+2349016075160", "https://avsnova.com", "🛡️", 0, "", "", "https://justanotherpanel.com/api/v2", "", "https://api.grizzlysms.com/stubs/handler_api.php"]
     );
   } else {
     await dbRun("UPDATE settings SET paystack_public_key = ?, paystack_secret_key = ?, jap_api_url = ?, jap_api_key = ?, sms_api_url = 'https://api.grizzlysms.com/stubs/handler_api.php'", [

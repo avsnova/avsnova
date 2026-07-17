@@ -28,6 +28,7 @@ import SecurityCenterAdmin from "../admin/SecurityCenterAdmin";
 import SmsConfigCenter from "../admin/SmsConfigCenter";
 import ProviderOverviewDashboard from "../admin/ProviderOverviewDashboard";
 import SmsPoolsAdmin from "../admin/SmsPoolsAdmin";
+import SocialLinksManager from "../admin/SocialLinksManager";
 import AdminSideNav, { AdminComingSoon, adminNavItemId, type AdminNavItem, type AdminNavSection } from "../admin/AdminSideNav";
 import AdvancedCredentialManager from "../admin/AdvancedCredentialManager";
 import FormBuilder from "../admin/FormBuilder";
@@ -278,6 +279,7 @@ const ADMIN_NAV_SECTIONS: AdminNavSection[] = [
       { label: "Homepage Builder", tab: "homepage" },
       { label: "Media Library", tab: "media" },
       { label: "Support Links & FAQs", tab: "support" },
+      { label: "Social Links", tab: "social_links" },
     ],
   },
   {
@@ -2323,6 +2325,7 @@ export default function AdminPanel() {
       case "gifts":
       case "settings":
       case "support":
+      case "social_links":
       case "banners":
       case "docs":
       case "forms":
@@ -3869,6 +3872,7 @@ export default function AdminPanel() {
       {activeTab === "security" && <SecurityCenterAdmin />}
       {activeTab === "provider_overview" && <div className="font-inter"><ProviderOverviewDashboard /></div>}
       {activeTab === "sms_pools" && <div className="font-inter"><SmsPoolsAdmin /></div>}
+      {activeTab === "social_links" && <div className="font-inter"><SocialLinksManager /></div>}
       {activeTab === "sms_config" && <div className="font-inter"><SmsConfigCenter /></div>}
 
       {/* ——— TAB VIEW: INTERNATIONAL GIFT DELIVERY (Requirement 23) ——— */}

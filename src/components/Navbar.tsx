@@ -58,12 +58,12 @@ export default function Navbar({
       <div className="max-w-7xl mx-auto px-4 sm:px-6 flex items-center justify-between gap-3">
 
         {/* Logo */}
-        <a href="#" className="flex items-center gap-2 group select-none shrink-0 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-400/60" aria-label="Aurevashop home">
+        <a href="#" className="flex items-center gap-2 group select-none shrink-0 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-400/60" aria-label="AUREVASHOP DIGITAL home">
           <div className="h-9 w-9 rounded-xl bg-gradient-to-tr from-purple-600 to-cyan-500 flex items-center justify-center shadow-lg shadow-purple-500/20 group-hover:scale-105 transition-transform duration-300">
             <Shield className="h-5 w-5 text-white animate-pulse-slow" />
           </div>
           <span className="text-lg sm:text-xl font-black font-space tracking-tight bg-gradient-to-r from-white via-purple-100 to-cyan-400 bg-clip-text text-transparent group-hover:brightness-110 transition-all">
-            Aurevashop
+            AUREVASHOP (AVS)
           </span>
         </a>
 
@@ -183,7 +183,7 @@ export default function Navbar({
             <span className="h-7 w-7 rounded-lg bg-gradient-to-tr from-purple-600 to-cyan-500 flex items-center justify-center">
               <Shield className="h-4 w-4 text-white" />
             </span>
-            <span className="text-base font-black font-space text-white">Aurevashop</span>
+            <span className="text-base font-black font-space text-white">AUREVASHOP (AVS)</span>
           </span>
           <button
             onClick={() => setIsOpen(false)}

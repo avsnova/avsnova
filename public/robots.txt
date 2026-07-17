@@ -1,0 +1,8 @@
+User-agent: *
+Allow: /
+
+# Do not index API responses or user-specific/admin areas.
+Disallow: /api/
+Disallow: /uploads/
+
+Sitemap: https://avsnova.com/sitemap.xml
