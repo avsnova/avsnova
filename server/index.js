@@ -8,7 +8,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import crypto from "crypto";
 import nodemailer from "nodemailer";
-import { initDb, dbRun, dbGet, dbAll, getActiveDbType } from "./db.js";
+import { initDb, dbRun, dbGet, dbAll, getActiveDbType, verifyDbConnection } from "./db.js";
 import smsRouter from "./routes/sms.js";
 import { getGrizzlyBalance } from "./services/grizzlySms.js";
 import { requireRole } from "./middleware/requireRole.js";
@@ -290,8 +290,14 @@ const enforcePriceFloor = (computedSell, providerCost, minProfit) => {
   return Math.max(Math.round(computedSell || 0), floor);
 };
 
-// Setup SQLite database for tracking logs & users
+// Initialize the database (schema + seed). First verify the MySQL server is reachable so a
+// connection problem fails ONCE with clear, actionable guidance instead of an ECONNREFUSED loop.
 try {
+  const conn = await verifyDbConnection();
+  if (!conn.ok) {
+    console.error("\n[FATAL] Database connection failed.\n" + conn.message + "\n");
+    process.exit(1);
+  }
   await initDb();
   console.log(`Database initialized successfully (${getActiveDbType() === "mysql" ? "MySQL" : "SQLite"}, ${process.env.NODE_ENV || "development"} mode).`);
   // Referral fix: guarantee every existing user has a unique referral code.

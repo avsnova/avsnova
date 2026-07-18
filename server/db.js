@@ -41,6 +41,48 @@ const isDdl = (sql) => /^\s*(CREATE|ALTER|DROP|TRUNCATE|RENAME)\b/i.test(sql);
 // The database engine actually in use (always "mysql").
 export const getActiveDbType = () => DB_TYPE;
 
+// Verify the database is actually reachable before we try to build the schema. This turns the
+// cryptic, repeating "ECONNREFUSED" crash loop into a single, clear, actionable message and lets
+// the caller fail fast. Returns { ok:true } or { ok:false, message } — never throws.
+export const verifyDbConnection = async () => {
+  const host = process.env.MYSQL_HOST || "localhost";
+  const port = parseInt(process.env.MYSQL_PORT || "3306");
+  const db = process.env.MYSQL_DATABASE;
+  try {
+    const conn = await mysqlPool.getConnection();
+    try { await conn.ping(); } finally { conn.release(); }
+    return { ok: true };
+  } catch (err) {
+    const code = err && err.code;
+    const lines = [
+      `Could not connect to MySQL at ${host}:${port} (database "${db}").`,
+      `Reason: ${code || err.message}`,
+      "",
+      "How to fix:",
+    ];
+    if (code === "ECONNREFUSED") {
+      lines.push(
+        `  • No MySQL server is listening on ${host}:${port}.`,
+        "  • Make sure MySQL/MariaDB is installed AND running:",
+        "      Linux:   sudo service mysql start   (or mariadb)",
+        "      macOS:   brew services start mysql",
+        "      Windows: start the MySQL service from Services",
+        `  • Confirm the port — standard MySQL is 3306. Set MYSQL_PORT in .env to match your server.`,
+      );
+    } else if (code === "ER_ACCESS_DENIED_ERROR") {
+      lines.push("  • MYSQL_USER / MYSQL_PASSWORD are wrong, or the user lacks access to the database.");
+    } else if (code === "ER_BAD_DB_ERROR") {
+      lines.push(`  • The database "${db}" does not exist yet. Create it:  CREATE DATABASE \`${db}\`;`);
+    } else if (code === "ENOTFOUND") {
+      lines.push(`  • The host "${host}" could not be resolved. Check MYSQL_HOST in .env.`);
+    } else {
+      lines.push("  • Check MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD and MYSQL_DATABASE in .env.");
+    }
+    lines.push("", "See .env.example for the full list of database settings.");
+    return { ok: false, message: lines.join("\n") };
+  }
+};
+
 // Helper to run a write/DDL query. The result is normalized so callers can rely on `.lastID`
 // and `.changes` (mysql2 exposes insertId/affectedRows).
 export const dbRun = (query, params = []) => {
