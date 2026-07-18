@@ -5932,42 +5932,14 @@ app.post("/api/admin/security/emergency-logout", authenticateToken, async (req, 
 app.post("/api/admin/backup/create", authenticateToken, async (req, res) => {
   if (!isUserAdmin(req.user)) return res.status(403).json({ error: "Access denied." });
 
-  try {
-    // In production the DB is MySQL/MariaDB — a file copy does not apply. Backups are handled by
-    // the host's scheduled mysqldump (see docs/BACKUP_RESTORE_GUIDE.md). We return a clear message
-    // instead of pretending to copy a file that doesn't exist.
-    if ((process.env.DB_TYPE || "").toLowerCase() === "mysql" || (process.env.NODE_ENV === "production")) {
-      return res.json({
-        success: false,
-        mode: "mysql",
-        message: "This install uses MySQL. Use an automated mysqldump backup (see docs/BACKUP_RESTORE_GUIDE.md). File-copy backups only apply to local SQLite development.",
-      });
-    }
-
-    if (!fs.existsSync("./backups")) {
-      fs.mkdirSync("./backups");
-    }
-
-    const timestamp = Date.now();
-    const filename = `database_backup_${timestamp}.sqlite`;
-    const destPath = `./backups/${filename}`;
-
-    // Perform file copy (SQLite dev only)
-    fs.copyFileSync("./database.sqlite", destPath);
-
-    const statsFile = fs.statSync(destPath);
-    const sizeBytes = statsFile.size;
-
-    await dbRun(
-      "INSERT INTO backups (filename, size_bytes, created_at) VALUES (?, ?, ?)",
-      [filename, sizeBytes, new Date().toISOString()]
-    );
-
-    await logAuditAction(req.user.id, req.user.username, `Created system database backup: ${filename}`, req.ip);
-    res.json({ success: true, message: "Database backup created successfully: " + filename });
-  } catch (err) {
-    res.status(500).json({ error: "Disaster backup creation failed: " + err.message });
-  }
+  // The database is MySQL/MariaDB. Backups are performed with mysqldump at the host/OS level
+  // (documented in docs/BACKUP_RESTORE_GUIDE.md) — not via an in-app file copy. Return clear
+  // guidance instead of a no-op so admins aren't misled.
+  return res.json({
+    success: false,
+    mode: "mysql",
+    message: "This install uses MySQL. Create backups with a scheduled mysqldump (see docs/BACKUP_RESTORE_GUIDE.md / your host's backup tools).",
+  });
 });
 
 app.get("/api/admin/backup/list", authenticateToken, async (req, res) => {
@@ -5982,30 +5954,13 @@ app.get("/api/admin/backup/list", authenticateToken, async (req, res) => {
 
 app.post("/api/admin/backup/restore", authenticateToken, async (req, res) => {
   if (!isUserAdmin(req.user)) return res.status(403).json({ error: "Access denied." });
-  const { filename } = req.body;
-
-  try {
-    if ((process.env.DB_TYPE || "").toLowerCase() === "mysql" || (process.env.NODE_ENV === "production")) {
-      return res.json({
-        success: false,
-        mode: "mysql",
-        message: "This install uses MySQL. Restore from a mysqldump file via the host (see docs/BACKUP_RESTORE_GUIDE.md). File-copy restore only applies to local SQLite development.",
-      });
-    }
-
-    const srcPath = `./backups/${filename}`;
-    if (!fs.existsSync(srcPath)) {
-      return res.status(404).json({ error: "Selected backup file not found." });
-    }
-
-    // Safely copy back (SQLite dev only)
-    fs.copyFileSync(srcPath, "./database.sqlite");
-
-    await logAuditAction(req.user.id, req.user.username, `Restored database system to backup: ${filename}`, req.ip);
-    res.json({ success: true, message: "System database restored and synced back successfully! Re-connecting tables." });
-  } catch (err) {
-    res.status(500).json({ error: "Database restore failed: " + err.message });
-  }
+  // MySQL restores are performed from a mysqldump file at the host/OS level (see the backup guide),
+  // never via an in-app file copy.
+  return res.json({
+    success: false,
+    mode: "mysql",
+    message: "This install uses MySQL. Restore from a mysqldump file via your host (see docs/BACKUP_RESTORE_GUIDE.md).",
+  });
 });
 
 app.get("/api/admin/backup/export-config", authenticateToken, async (req, res) => {

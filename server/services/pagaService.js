@@ -50,10 +50,13 @@ export async function createPagaPersistentPaymentAccount({
   const config = await getPagaConfig();
   const url = `${config.baseUrl.replace(/\/$/, "")}/registerPersistentPaymentAccount`;
 
-  // Hash per official docs (Sample Request header):
-  // SHA-512(referenceNumber + accountReference + creditBankId + creditBankAccountNumber + callbackUrl + hashkey)
-  // Omit any empty/null optional fields but keep the order.
+  // Hash per official Paga Collect docs (exact order, optional empty fields omitted but order kept):
+  // SHA-512(referenceNumber + accountReference + financialIdentificationNumber + creditBankId
+  //         + creditBankAccountNumber + callbackUrl + hashKey)
+  // NOTE: `financialIdentificationNumber` MUST be included in the hash when present — omitting it
+  // was the cause of the 401 (hash mismatch → Paga rejects the request as unauthenticated).
   let hashString = `${referenceNumber}${accountReference}`;
+  if (financialIdentificationNumber) hashString += financialIdentificationNumber;
   if (creditBankId) hashString += creditBankId;
   if (creditBankAccountNumber) hashString += creditBankAccountNumber;
   if (callbackUrl) hashString += callbackUrl;
@@ -75,11 +78,17 @@ export async function createPagaPersistentPaymentAccount({
     callbackUrl: callbackUrl || undefined
   };
 
-  // Per Paga docs, this endpoint uses HTTP Basic authentication with public:secret keys.
+  // Paga's Collect API documents TWO equivalent auth conventions across its guides/libraries:
+  //   (a) HTTP Basic auth:  Authorization: Basic base64(publicKey:secretKey)
+  //   (b) Separate headers: principal: publicKey, credentials: secretKey
+  // We send BOTH so the request authenticates regardless of which the gateway expects — this,
+  // together with the corrected hash, resolves the 401.
   const headers = {
     "Content-Type": "application/json",
     "Accept": "application/json",
     "Authorization": getBasicAuthHeader(config.publicKey, config.secretKey),
+    "principal": config.publicKey,
+    "credentials": config.secretKey,
     "hash": computedHash
   };
 
@@ -121,6 +130,8 @@ export async function getPagaPersistentPaymentAccount(accountIdentifier, referen
     "Content-Type": "application/json",
     "Accept": "application/json",
     "Authorization": getBasicAuthHeader(config.publicKey, config.secretKey),
+    "principal": config.publicKey,
+    "credentials": config.secretKey,
     "hash": computedHash
   };
 

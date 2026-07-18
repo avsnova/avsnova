@@ -19,8 +19,11 @@
  *   2. Run the app once so it creates the MySQL schema:  npm start   (Ctrl-C after it says "initialized")
  *   3. Run this tool:                                    node server/migrate-sqlite-to-mysql.js
  *   4. Verify row counts (the tool prints them), then start the app normally.
+ *
+ * NOTE: This is a ONE-TIME migration utility for operators moving off an old SQLite file. The
+ * app itself no longer depends on SQLite. `sqlite3` is not a project dependency anymore, so if you
+ * need to run this, install it first:  npm i sqlite3   (then run this script, then remove it).
  */
-import sqlite3 from "sqlite3";
 import mysql from "mysql2/promise";
 import dotenv from "dotenv";
 import fs from "fs";
@@ -33,6 +36,11 @@ const SQLITE_PATH = process.env.SQLITE_PATH || path.resolve(process.cwd(), "data
 function fail(msg) { console.error(`\n[migration] ERROR: ${msg}\n`); process.exit(1); }
 
 if (!fs.existsSync(SQLITE_PATH)) fail(`SQLite file not found at ${SQLITE_PATH}. Set SQLITE_PATH if it's elsewhere.`);
+
+// Lazy-load sqlite3 only when this tool actually runs (it's not a project dependency).
+let sqlite3;
+try { sqlite3 = (await import("sqlite3")).default; }
+catch { fail("The 'sqlite3' package isn't installed. Run `npm i sqlite3` to use this one-time migration tool, then remove it afterwards."); }
 
 // Open SQLite (read-only).
 const sqliteDb = new sqlite3.Database(SQLITE_PATH, sqlite3.OPEN_READONLY, (err) => {

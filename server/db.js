@@ -1,130 +1,84 @@
-import sqlite3 from "sqlite3";
 import mysql from "mysql2/promise";
 import bcrypt from "bcryptjs";
 import dotenv from "dotenv";
 
 dotenv.config();
 
-// Database engine selection.
-//   • Local development defaults to SQLite (zero-config — just `npm run dev`).
-//   • Production defaults to MySQL and requires it (never silently uses a file DB in prod).
-// You can always override explicitly with DB_TYPE=sqlite|mysql regardless of NODE_ENV.
-const IS_PROD = (process.env.NODE_ENV || "development") === "production";
-let DB_TYPE = (process.env.DB_TYPE || (IS_PROD ? "mysql" : "sqlite")).toLowerCase(); // 'sqlite' (dev) | 'mysql' (prod)
+// ─── Database engine: MySQL / MariaDB ONLY ───────────────────────────────────
+// This project uses MySQL as its single database engine in every environment (development AND
+// production). SQLite has been removed entirely — there is no file-DB fallback. Configure the
+// connection with MYSQL_HOST / MYSQL_PORT / MYSQL_USER / MYSQL_PASSWORD / MYSQL_DATABASE in .env
+// (see .env.example). For local development, run a local MySQL/MariaDB and point .env at it.
+export const DB_TYPE = "mysql";
 
-// Guard: block SQLite in production ONLY when the operator hasn't explicitly opted into it.
-// (Explicit DB_TYPE=sqlite is honored so a small prod install can still choose it deliberately.)
-if (IS_PROD && DB_TYPE === "sqlite" && !process.env.DB_TYPE) {
-  console.error("[FATAL] Running in production (NODE_ENV=production) without a database configured.");
-  console.error("        Set DB_TYPE=mysql and MYSQL_HOST/USER/PASSWORD/DATABASE in .env, or set DB_TYPE=sqlite to explicitly allow the file DB.");
+// Required connection variables must be present — refuse to start with a clear message otherwise,
+// so misconfiguration is caught immediately instead of failing on the first query.
+const REQUIRED_DB_VARS = ["MYSQL_DATABASE", "MYSQL_USER"];
+const missing = REQUIRED_DB_VARS.filter((v) => !process.env[v]);
+if (missing.length) {
+  console.error(`[FATAL] Missing required database configuration: ${missing.join(", ")}.`);
+  console.error("        Set MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD and MYSQL_DATABASE in .env (see .env.example).");
   process.exit(1);
 }
-// Guard: MySQL selected but not configured. In DEVELOPMENT we fall back to SQLite (so a fresh
-// clone runs instantly); in PRODUCTION we refuse to start with a clear message.
-if (DB_TYPE === "mysql" && !process.env.MYSQL_DATABASE) {
-  if (IS_PROD) {
-    console.error("[FATAL] DB_TYPE=mysql but MYSQL_DATABASE is not set. Configure MYSQL_HOST/USER/PASSWORD/DATABASE in .env.");
-    process.exit(1);
-  }
-  console.warn("[DB] DB_TYPE=mysql requested but MYSQL_DATABASE is missing — falling back to SQLite for local development.");
-  DB_TYPE = "sqlite";
-}
 
-let sqliteDb = null;
-let mysqlPool = null;
-
-// Initialize Database Connections
-if (DB_TYPE === "mysql") {
-  console.log("[AVS Database] Connecting in high-concurrency MySQL mode...");
-  mysqlPool = mysql.createPool({
-    host: process.env.MYSQL_HOST || "localhost",
-    user: process.env.MYSQL_USER || "root",
-    password: process.env.MYSQL_PASSWORD || "",
-    database: process.env.MYSQL_DATABASE || "aurevashop",
-    port: parseInt(process.env.MYSQL_PORT || "3306"),
-    waitForConnections: true,
-    connectionLimit: 50,
-    queueLimit: 0
-  });
-} else {
-  console.log("[AVS Database] Connecting in portable, file-based SQLite mode...");
-  sqliteDb = new sqlite3.Database("./database.sqlite", (err) => {
-    if (err) {
-      console.error("SQLite database connection failed:", err.message);
-    } else {
-      console.log("Connected to the SQLite database.");
-    }
-  });
-}
+console.log("[AVS Database] Connecting in high-concurrency MySQL mode...");
+const mysqlPool = mysql.createPool({
+  host: process.env.MYSQL_HOST || "localhost",
+  user: process.env.MYSQL_USER,
+  password: process.env.MYSQL_PASSWORD || "",
+  database: process.env.MYSQL_DATABASE,
+  port: parseInt(process.env.MYSQL_PORT || "3306"),
+  waitForConnections: true,
+  connectionLimit: parseInt(process.env.MYSQL_POOL_LIMIT || "20"),
+  queueLimit: 0,
+  charset: "utf8mb4",
+});
 
 // DDL (schema) statements can't run through mysql2's prepared-statement `execute()`; they must
 // use `query()`. This detects the schema verbs so dbRun can route them correctly on MySQL.
 const isDdl = (sql) => /^\s*(CREATE|ALTER|DROP|TRUNCATE|RENAME)\b/i.test(sql);
 
-// Helper to run query in a promise.
-// The result is normalized so callers can rely on `.lastID` and `.changes` regardless of the
-// underlying driver (SQLite exposes lastID/changes; MySQL exposes insertId/affectedRows).
-// The database engine actually in use after all guards/fallbacks ("sqlite" | "mysql").
+// The database engine actually in use (always "mysql").
 export const getActiveDbType = () => DB_TYPE;
 
+// Helper to run a write/DDL query. The result is normalized so callers can rely on `.lastID`
+// and `.changes` (mysql2 exposes insertId/affectedRows).
 export const dbRun = (query, params = []) => {
   const finalQuery = translateSql(query);
   return new Promise((resolve, reject) => {
-    if (DB_TYPE === "mysql") {
-      // DDL → query() (no prepared statement); parameterized DML → execute().
-      const runner = isDdl(finalQuery)
-        ? mysqlPool.query(finalQuery)
-        : mysqlPool.execute(finalQuery, params);
-      runner
-        .then(([result]) => resolve({
-          lastID: result && result.insertId,
-          changes: result && result.affectedRows,
-          insertId: result && result.insertId,
-          affectedRows: result && result.affectedRows,
-          raw: result,
-        }))
-        .catch(err => reject(err));
-    } else {
-      sqliteDb.run(finalQuery, params, function (err) {
-        if (err) reject(err);
-        // `this` carries lastID + changes; also expose MySQL-style aliases for symmetry.
-        else resolve({ lastID: this.lastID, changes: this.changes, insertId: this.lastID, affectedRows: this.changes });
-      });
-    }
+    // DDL → query() (mysql2 can't prepare DDL); parameterized DML → execute().
+    const runner = isDdl(finalQuery)
+      ? mysqlPool.query(finalQuery)
+      : mysqlPool.execute(finalQuery, params);
+    runner
+      .then(([result]) => resolve({
+        lastID: result && result.insertId,
+        changes: result && result.affectedRows,
+        insertId: result && result.insertId,
+        affectedRows: result && result.affectedRows,
+        raw: result,
+      }))
+      .catch(reject);
   });
 };
 
-// Helper to get single row
+// Helper to get a single row (or null).
 export const dbGet = (query, params = []) => {
   const finalQuery = translateSql(query);
   return new Promise((resolve, reject) => {
-    if (DB_TYPE === "mysql") {
-      mysqlPool.execute(finalQuery, params)
-        .then(([rows]) => resolve(rows[0] || null))
-        .catch(err => reject(err));
-    } else {
-      sqliteDb.get(finalQuery, params, (err, row) => {
-        if (err) reject(err);
-        else resolve(row);
-      });
-    }
+    mysqlPool.execute(finalQuery, params)
+      .then(([rows]) => resolve(rows[0] || null))
+      .catch(reject);
   });
 };
 
-// Helper to get all rows
+// Helper to get all rows.
 export const dbAll = (query, params = []) => {
   const finalQuery = translateSql(query);
   return new Promise((resolve, reject) => {
-    if (DB_TYPE === "mysql") {
-      mysqlPool.execute(finalQuery, params)
-        .then(([rows]) => resolve(rows))
-        .catch(err => reject(err));
-    } else {
-      sqliteDb.all(finalQuery, params, (err, rows) => {
-        if (err) reject(err);
-        else resolve(rows);
-      });
-    }
+    mysqlPool.execute(finalQuery, params)
+      .then(([rows]) => resolve(rows))
+      .catch(reject);
   });
 };
 
@@ -144,11 +98,6 @@ export const dbAll = (query, params = []) => {
 // The reverse (MySQL -> SQLite) only needs AUTO_INCREMENT -> AUTOINCREMENT.
 // ---------------------------------------------------------------------------
 function translateSql(query) {
-  if (DB_TYPE !== "mysql") {
-    // SQLite path: accept MySQL-style AUTO_INCREMENT written anywhere.
-    return query.replace(/AUTO_INCREMENT/gi, "AUTOINCREMENT");
-  }
-
   let q = query;
 
   // Type/keyword fixes.
@@ -3094,5 +3043,5 @@ export const initDb = async () => {
     }
   }, 100);
 };
-export { sqliteDb, mysqlPool };
-export default sqliteDb;
+export { mysqlPool };
+export default mysqlPool;
