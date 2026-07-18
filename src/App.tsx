@@ -597,7 +597,7 @@ export default function App() {
     return (
       <div className="min-h-screen bg-[#05020a] flex flex-col items-center justify-center gap-5" role="status" aria-live="polite" aria-busy="true">
         <div className="text-2xl font-black font-space tracking-tight text-white select-none">
-          AVS<span className="text-cyan-400">shop</span>
+          AVS<span className="text-cyan-400"> Nova</span>
         </div>
         <div className="h-8 w-8 rounded-full border-2 border-purple-500/30 border-t-cyan-400 animate-spin" />
         <span className="text-xs text-purple-200/50 font-space">Connecting to server…</span>
@@ -612,7 +612,7 @@ export default function App() {
     return (
       <div className="min-h-screen bg-[#05020a] flex flex-col items-center justify-center gap-5" role="status" aria-live="polite" aria-busy="true">
         <div className="text-2xl font-black font-space tracking-tight text-white select-none">
-          AVS<span className="text-cyan-400">shop</span>
+          AVS<span className="text-cyan-400"> Nova</span>
         </div>
         <div className="h-8 w-8 rounded-full border-2 border-purple-500/30 border-t-cyan-400 animate-spin" />
         <span className="text-xs text-purple-200/50 font-space">Restoring your session…</span>

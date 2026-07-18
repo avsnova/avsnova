@@ -36,7 +36,7 @@ export default class ErrorBoundary extends Component<Props, State> {
     return (
       <div className="min-h-screen bg-[#05020a] flex flex-col items-center justify-center gap-6 px-6 text-center">
         <div className="text-2xl font-black font-space tracking-tight text-white select-none">
-          AVS<span className="text-cyan-400">shop</span>
+          AVS<span className="text-cyan-400"> Nova</span>
         </div>
         <div className="max-w-md">
           <h1 className="text-xl font-bold font-space text-white mb-2">Something went wrong</h1>

@@ -5,19 +5,29 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-// Production MUST use a real server database (MySQL/MariaDB). SQLite is a dev-only convenience.
-// If NODE_ENV=production and DB_TYPE isn't explicitly "sqlite", we require MySQL and refuse to
-// silently fall back to a file DB in production.
+// Database engine selection.
+//   • Local development defaults to SQLite (zero-config — just `npm run dev`).
+//   • Production defaults to MySQL and requires it (never silently uses a file DB in prod).
+// You can always override explicitly with DB_TYPE=sqlite|mysql regardless of NODE_ENV.
 const IS_PROD = (process.env.NODE_ENV || "development") === "production";
-let DB_TYPE = process.env.DB_TYPE || (IS_PROD ? "mysql" : "sqlite"); // 'sqlite' (dev) or 'mysql' (prod)
+let DB_TYPE = (process.env.DB_TYPE || (IS_PROD ? "mysql" : "sqlite")).toLowerCase(); // 'sqlite' (dev) | 'mysql' (prod)
 
-if (IS_PROD && DB_TYPE === "sqlite") {
-  console.error("[FATAL] SQLite is not permitted in production. Set DB_TYPE=mysql and the MYSQL_* variables. Refusing to start.");
+// Guard: block SQLite in production ONLY when the operator hasn't explicitly opted into it.
+// (Explicit DB_TYPE=sqlite is honored so a small prod install can still choose it deliberately.)
+if (IS_PROD && DB_TYPE === "sqlite" && !process.env.DB_TYPE) {
+  console.error("[FATAL] Running in production (NODE_ENV=production) without a database configured.");
+  console.error("        Set DB_TYPE=mysql and MYSQL_HOST/USER/PASSWORD/DATABASE in .env, or set DB_TYPE=sqlite to explicitly allow the file DB.");
   process.exit(1);
 }
+// Guard: MySQL selected but not configured. In DEVELOPMENT we fall back to SQLite (so a fresh
+// clone runs instantly); in PRODUCTION we refuse to start with a clear message.
 if (DB_TYPE === "mysql" && !process.env.MYSQL_DATABASE) {
-  console.error("[FATAL] DB_TYPE=mysql but MYSQL_DATABASE is not set. Configure MYSQL_HOST/USER/PASSWORD/DATABASE in .env.");
-  process.exit(1);
+  if (IS_PROD) {
+    console.error("[FATAL] DB_TYPE=mysql but MYSQL_DATABASE is not set. Configure MYSQL_HOST/USER/PASSWORD/DATABASE in .env.");
+    process.exit(1);
+  }
+  console.warn("[DB] DB_TYPE=mysql requested but MYSQL_DATABASE is missing — falling back to SQLite for local development.");
+  DB_TYPE = "sqlite";
 }
 
 let sqliteDb = null;
@@ -54,6 +64,9 @@ const isDdl = (sql) => /^\s*(CREATE|ALTER|DROP|TRUNCATE|RENAME)\b/i.test(sql);
 // Helper to run query in a promise.
 // The result is normalized so callers can rely on `.lastID` and `.changes` regardless of the
 // underlying driver (SQLite exposes lastID/changes; MySQL exposes insertId/affectedRows).
+// The database engine actually in use after all guards/fallbacks ("sqlite" | "mysql").
+export const getActiveDbType = () => DB_TYPE;
+
 export const dbRun = (query, params = []) => {
   const finalQuery = translateSql(query);
   return new Promise((resolve, reject) => {

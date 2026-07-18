@@ -8,7 +8,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import crypto from "crypto";
 import nodemailer from "nodemailer";
-import { initDb, dbRun, dbGet, dbAll } from "./db.js";
+import { initDb, dbRun, dbGet, dbAll, getActiveDbType } from "./db.js";
 import smsRouter from "./routes/sms.js";
 import { getGrizzlyBalance } from "./services/grizzlySms.js";
 import { requireRole } from "./middleware/requireRole.js";
@@ -293,7 +293,7 @@ const enforcePriceFloor = (computedSell, providerCost, minProfit) => {
 // Setup SQLite database for tracking logs & users
 try {
   await initDb();
-  console.log(`Production database initialized successfully (${process.env.DB_TYPE === "mysql" ? "MySQL" : "SQLite"}).`);
+  console.log(`Database initialized successfully (${getActiveDbType() === "mysql" ? "MySQL" : "SQLite"}, ${process.env.NODE_ENV || "development"} mode).`);
   // Referral fix: guarantee every existing user has a unique referral code.
   await backfillReferralCodes();
   // Load dashboard-managed Telegram config (token/secret/categories/digest/severity).

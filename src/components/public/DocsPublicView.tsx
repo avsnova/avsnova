@@ -51,7 +51,7 @@ export default function DocsPublicView({ slug, onNavigate, onHome }: { slug?: st
       <div className="sticky top-0 z-20 backdrop-blur-xl bg-[#05020a]/80 border-b border-purple-500/15">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
           <button onClick={onHome} className="flex items-center gap-2 cursor-pointer">
-            <span className="text-lg font-black font-space tracking-tight text-white">AVS<span className="text-cyan-400">shop</span></span>
+            <span className="text-lg font-black font-space tracking-tight text-white">AVS<span className="text-cyan-400"> Nova</span></span>
             <span className="text-[10px] text-purple-200/40 uppercase tracking-widest font-bold hidden sm:inline">Docs</span>
           </button>
           <button onClick={onHome} className="flex items-center gap-1.5 text-xs font-bold text-purple-200/60 hover:text-white cursor-pointer"><Home className="h-4 w-4" /> Home</button>

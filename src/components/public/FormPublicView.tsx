@@ -133,7 +133,7 @@ export default function FormPublicView({ slug }: { slug: string }) {
       <div className="absolute bottom-[10%] right-[10%] w-72 h-72 rounded-full bg-cyan-600/10 blur-[100px] pointer-events-none" />
       <div className="relative w-full max-w-lg z-10">
         <div className="text-center mb-6">
-          <span className="text-2xl font-black font-space tracking-tight text-white">AVS<span className="text-cyan-400">shop</span></span>
+          <span className="text-2xl font-black font-space tracking-tight text-white">AVS<span className="text-cyan-400"> Nova</span></span>
         </div>
 
         {loading ? (
