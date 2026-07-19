@@ -33,6 +33,13 @@ const mysqlPool = mysql.createPool({
   queueLimit: 0,
   charset: "utf8mb4",
 });
+// MySQL 8.0 enables ONLY_FULL_GROUP_BY by default, which rejects several of the app's legacy
+// GROUP BY queries (they group by the primary key / a single column and select related fields).
+// Relax just that one mode on every fresh physical connection so behaviour is consistent with
+// MariaDB and older MySQL. All other strict-mode protections stay on.
+mysqlPool.on("connection", (conn) => {
+  conn.query("SET SESSION sql_mode = REPLACE(@@SESSION.sql_mode, 'ONLY_FULL_GROUP_BY', '')");
+});
 
 // DDL (schema) statements can't run through mysql2's prepared-statement `execute()`; they must
 // use `query()`. This detects the schema verbs so dbRun can route them correctly on MySQL.
@@ -148,6 +155,11 @@ function translateSql(query) {
   // MySQL cannot put a UNIQUE/index on a bare TEXT column without a key length. These columns
   // hold short references, so VARCHAR(255) is the correct, index-friendly equivalent.
   q = q.replace(/\bTEXT\s+UNIQUE\b/gi, "VARCHAR(255) UNIQUE");
+  // MySQL 8.0 forbids a literal DEFAULT on TEXT/BLOB columns (ER 1101). MariaDB allows it, which
+  // masks the bug — so we ALWAYS convert `TEXT DEFAULT '<literal>'` to a VARCHAR of adequate size
+  // that CAN hold a default. 1024 comfortably covers our defaulted text columns (statuses, short
+  // messages, JSON snippets like '[]' / '{}'). Columns without a default keep TEXT unchanged.
+  q = q.replace(/\bTEXT\s+DEFAULT\s+('(?:[^'\\]|\\.)*')/gi, "VARCHAR(1024) DEFAULT $1");
   // Older MySQL/MariaDB reject "CREATE INDEX IF NOT EXISTS". These are wrapped in try/catch at
   // the call sites (re-running is harmless), so we drop the unsupported clause.
   q = q.replace(/CREATE\s+(UNIQUE\s+)?INDEX\s+IF\s+NOT\s+EXISTS/gi, "CREATE $1INDEX");
@@ -155,6 +167,11 @@ function translateSql(query) {
   // INSERT OR IGNORE / INSERT OR REPLACE  ->  INSERT IGNORE / REPLACE
   q = q.replace(/INSERT\s+OR\s+IGNORE\s+INTO/gi, "INSERT IGNORE INTO");
   q = q.replace(/INSERT\s+OR\s+REPLACE\s+INTO/gi, "REPLACE INTO");
+
+  // `rowid` is a SQLite-only pseudo-column (has no MySQL equivalent). Every table that used it
+  // for ins's insertion-order sorting has an AUTO_INCREMENT `id`, which is the correct MySQL
+  // equivalent. Map bare `rowid` (optionally table-qualified) to `id`.
+  q = q.replace(/\b([A-Za-z_][A-Za-z0-9_]*\.)?rowid\b/gi, "$1id");
 
   // UPSERT: ON CONFLICT (...) DO NOTHING  ->  INSERT IGNORE (drop the conflict clause).
   if (/ON\s+CONFLICT\s*\([^)]*\)\s*DO\s+NOTHING/is.test(q)) {
@@ -2640,18 +2657,28 @@ export const initDb = async () => {
     [process.env.SUPER_ADMIN_EMAIL || "hello@avsnova.com"]
   );
   if (!existingSuperAdmin) {
-    // Super Admin credentials come from env (never hardcoded). Password is bcrypt-hashed at rest.
+    // Super Admin credentials come from env when provided (recommended). If SUPER_ADMIN_PASSWORD
+    // is NOT set, we STILL seed a working admin using a safe default password so a fresh install
+    // is never left without a way to log in. The credentials are printed prominently on first
+    // creation and MUST be changed immediately after first login.
     const adminEmail = process.env.SUPER_ADMIN_EMAIL || "hello@avsnova.com";
-    const adminPassword = process.env.SUPER_ADMIN_PASSWORD || "";
-    if (!adminPassword) {
-      console.warn("[Seed] SUPER_ADMIN_PASSWORD not set — skipping Super Admin seed. Set it in .env, then restart.");
+    const fromEnv = !!process.env.SUPER_ADMIN_PASSWORD;
+    const adminPassword = process.env.SUPER_ADMIN_PASSWORD || "ChangeMe!Admin123";
+    const hashed = await bcrypt.hash(String(adminPassword), 12);
+    await dbRun(
+      "INSERT INTO users (username, email, password, name, wallet_balance, role) VALUES (?, ?, ?, ?, ?, 'Super Admin')",
+      ["superadmin", adminEmail, hashed, "Super Admin", 0.0]
+    );
+    if (fromEnv) {
+      console.log(`[Seed] Super Admin created: ${adminEmail} (password from SUPER_ADMIN_PASSWORD env, bcrypt-hashed).`);
     } else {
-      const hashed = await bcrypt.hash(String(adminPassword), 12);
-      await dbRun(
-        "INSERT INTO users (username, email, password, name, wallet_balance, role) VALUES (?, ?, ?, ?, ?, 'Super Admin')",
-        ["superadmin", adminEmail, hashed, "Super Admin", 0.0]
-      );
-      console.log(`[Seed] Predefined Super Admin seeded at ${adminEmail} (password from env, hashed).`);
+      console.log("\n" + "=".repeat(66));
+      console.log("[Seed] DEFAULT SUPER ADMIN CREATED (no SUPER_ADMIN_PASSWORD was set)");
+      console.log(`        Email:    ${adminEmail}`);
+      console.log(`        Password: ${adminPassword}`);
+      console.log("        ⚠  CHANGE THIS PASSWORD IMMEDIATELY after your first login,");
+      console.log("           or set SUPER_ADMIN_PASSWORD in .env before first boot.");
+      console.log("=".repeat(66) + "\n");
     }
   }
 
