@@ -7,7 +7,7 @@ interface AuthModalsProps {
   isOpen: boolean;
   onClose: () => void;
   type: "login" | "signup";
-  onSuccess: (user: { name: string; email: string; wallet_balance: number }, meta?: { isNew?: boolean }) => void;
+  onSuccess: (user: { name: string; email: string; wallet_balance: number; role?: string; username?: string; phone?: string }, meta?: { isNew?: boolean }) => void;
   toggleType: () => void;
 }
 
@@ -236,7 +236,7 @@ export default function AuthModals({ isOpen, onClose, type, onSuccess, toggleTyp
       stopStageMessages();
       setIsLoading(false);
       const wasSignup = mode === "signup";
-      onSuccess({ name: res.user.name, email: res.user.email, wallet_balance: res.user.wallet_balance }, { isNew: wasSignup });
+      onSuccess({ name: res.user.name, email: res.user.email, wallet_balance: res.user.wallet_balance, role: res.user.role, username: res.user.username, phone: res.user.phone }, { isNew: wasSignup });
       onClose();
       resetForm();
     } catch (e: any) {

@@ -159,8 +159,14 @@ async function getJapApiUrl() {
 }
 
 async function getJapApiKey() {
+  // DB (admin-managed) wins, then .env. Inert placeholders are treated as "not set" so a real
+  // key in .env is never shadowed by a placeholder. No hardcoded secret in source.
   const row = await dbGet("SELECT jap_api_key FROM settings LIMIT 1");
-  return row && row.jap_api_key ? row.jap_api_key : (process.env.JAP_API_KEY || "228bc26e34b4056c194fcca01d92fa7d");
+  const dbVal = row && row.jap_api_key ? String(row.jap_api_key).trim() : "";
+  const isPh = (v) => !v || /REPLACE_ME|_REPLACE\b|your_jap_api_key_here/i.test(v);
+  if (!isPh(dbVal)) return dbVal;
+  const envVal = (process.env.JAP_API_KEY || "").trim();
+  return isPh(envVal) ? "" : envVal;
 }
 
 // Cache for live NGN exchange rate (USD to NGN)
@@ -1214,7 +1220,9 @@ async function loadTelegramConfig() {
       minSeverity: (r && r.telegram_min_severity) || "info",
       groupChatId: (r && r.telegram_group_chat_id) || "",
     };
-    tg.setConfig({ token: (r && r.telegram_bot_token) || "", secret: (r && r.telegram_webhook_secret) || "" });
+    // Strip inert placeholders so a fake token never attempts real Telegram API calls.
+    const _tgClean = (v) => { const s = String(v || "").trim(); return /REPLACE_ME|_REPLACE\b/i.test(s) ? "" : s; };
+    tg.setConfig({ token: _tgClean(r && r.telegram_bot_token), secret: _tgClean(r && r.telegram_webhook_secret) });
     return _tgCfg;
   } catch (e) { return _tgCfg; }
 }
@@ -1567,7 +1575,7 @@ app.post("/api/auth/register", async (req, res) => {
     } catch (e) {}
 
     const token = jwt.sign({ id: userId, email }, JWT_SECRET, { expiresIn: "24h" });
-    res.json({ token, user: { name, email, wallet_balance: 0.0, referral_code: refCode, username: cleanUsername } });
+     res.json({ token, user: { name, email, wallet_balance: 0.0, referral_code: refCode, username: cleanUsername, role: "Customer" } });
   } catch (e) {
     res.status(500).json({ error: "Registration database error: " + e.message });
   }
@@ -1619,7 +1627,12 @@ app.post("/api/auth/login", async (req, res) => {
         name: user.name,
         email: user.email,
         wallet_balance: user.wallet_balance,
-        referral_code: user.referral_code
+        referral_code: user.referral_code,
+        // Include role + username so the client can render the correct UI (e.g. Admin Panel)
+        // immediately after login WITHOUT waiting for a page reload / /api/auth/me round-trip.
+        role: user.role,
+        username: user.username,
+        phone: user.phone
       }
     });
   } catch (e) {

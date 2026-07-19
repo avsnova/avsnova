@@ -2184,39 +2184,91 @@ export const initDb = async () => {
     await dbRun("UPDATE settings SET jap_api_url = COALESCE(NULLIF(jap_api_url, ''), 'https://justanotherpanel.com/api/v2'), sms_api_url = COALESCE(NULLIF(sms_api_url, ''), 'https://api.grizzlysms.com/stubs/handler_api.php')");
   }
 
-  // ——— Visible, editable placeholder integration keys (Admin → Settings) ———
-  // Fills each key column with a clearly-marked PLACEHOLDER only when it's still empty AND no real
-  // value is provided via env. This guarantees every integration field is VISIBLE and EDITABLE in
-  // the Admin Panel (not blank), so the operator can replace them by hand. It NEVER overwrites a
-  // real key: env value wins first, an existing DB value is kept, and only a truly-empty field gets
-  // the placeholder. Placeholders are inert (they won't authenticate) and safe to ship.
+  // ——— Integration keys: .env is AUTHORITATIVE; placeholders only fill true blanks ———
+  //
+  // BACKGROUND / ROOT CAUSE FIX (regressions where real keys "disappeared"):
+  //   Every key resolver in the app reads the DB `settings` column FIRST and the .env var only as
+  //   a fallback. A previous version of this block seeded inert "REPLACE_ME" PLACEHOLDERS into any
+  //   empty column. Once a placeholder was written, the column was no longer empty, so:
+  //     (a) the placeholder was never refreshed, and
+  //     (b) because DB wins over env, a REAL key later added to .env was PERMANENTLY SHADOWED by
+  //         the stale placeholder — the operator's key silently never took effect.
+  //
+  // NEW BEHAVIOUR (per column, in priority order):
+  //   1. If .env provides a real value  -> WRITE it into the DB (authoritative sync). This both
+  //      un-shadows the key and heals any stale placeholder. .env is the single source of truth.
+  //   2. Else if the DB already holds a real (non-empty, non-placeholder) value -> KEEP it. This
+  //      preserves keys typed by the operator in Admin -> Settings.
+  //   3. Else (column blank OR still a placeholder, and no env value) -> write an inert placeholder
+  //      so the field stays VISIBLE/EDITABLE in the Admin Panel. Placeholders never authenticate.
+  //
+  // A value counts as a "placeholder" if it contains REPLACE_ME / _REPLACE / yourmailserver, or is
+  // one of the specific inert defaults below. Real keys never match these patterns.
   try {
-    const ph = {
-      paystack_public_key: process.env.PAYSTACK_PUBLIC_KEY || "pk_test_REPLACE_ME",
-      paystack_secret_key: process.env.PAYSTACK_SECRET_KEY || "sk_test_REPLACE_ME",
-      monnify_api_key: process.env.MONNIFY_API_KEY || "MK_TEST_REPLACE_ME",
-      monnify_secret_key: process.env.MONNIFY_SECRET_KEY || "REPLACE_ME_MONNIFY_SECRET",
-      monnify_contract_code: process.env.MONNIFY_CONTRACT_CODE || "0000000000",
-      paga_public_key: process.env.PAGA_PUBLIC_KEY || "REPLACE_ME_PAGA_PUBLIC",
-      paga_secret_key: process.env.PAGA_SECRET_KEY || "REPLACE_ME_PAGA_SECRET",
-      paga_hash_key: process.env.PAGA_HASH_KEY || "REPLACE_ME_PAGA_HASH",
-      flutterwave_public_key: process.env.FLUTTERWAVE_PUBLIC_KEY || "FLWPUBK_TEST-REPLACE_ME",
-      flutterwave_secret_key: process.env.FLUTTERWAVE_SECRET_KEY || "FLWSECK_TEST-REPLACE_ME",
-      flutterwave_encryption_key: process.env.FLUTTERWAVE_ENCRYPTION_KEY || "FLWSECK_TEST_REPLACE",
-      jap_api_key: process.env.JAP_API_KEY || "REPLACE_ME_JAP_API_KEY",
-      grizzly_api_key: process.env.GRIZZLY_SMS_API_KEY || "REPLACE_ME_GRIZZLY_KEY",
-      fivesim_api_key: process.env.FIVESIM_API_KEY || "REPLACE_ME_5SIM_KEY",
-      smspool_api_key: process.env.SMSPOOL_API_KEY || "REPLACE_ME_SMSPOOL_KEY",
-      smtp_host: process.env.SMTP_HOST || "smtp.yourmailserver.com",
-      smtp_user: process.env.SMTP_USER || "no-reply@avsnova.com",
-      smtp_pass: process.env.SMTP_PASS || "REPLACE_ME_SMTP_PASSWORD",
-      smtp_from: process.env.SMTP_FROM || "AVS Nova <no-reply@avsnova.com>",
+    // column -> { env: <ENV VAR NAME>, ph: <inert placeholder to show when nothing configured> }
+    const KEY_MAP = {
+      paystack_public_key:       { env: "PAYSTACK_PUBLIC_KEY",       ph: "pk_test_REPLACE_ME" },
+      paystack_secret_key:       { env: "PAYSTACK_SECRET_KEY",       ph: "sk_test_REPLACE_ME" },
+      monnify_api_key:           { env: "MONNIFY_API_KEY",           ph: "MK_TEST_REPLACE_ME" },
+      monnify_secret_key:        { env: "MONNIFY_SECRET_KEY",        ph: "REPLACE_ME_MONNIFY_SECRET" },
+      monnify_contract_code:     { env: "MONNIFY_CONTRACT_CODE",     ph: "0000000000" },
+      paga_public_key:           { env: "PAGA_PUBLIC_KEY",           ph: "REPLACE_ME_PAGA_PUBLIC" },
+      paga_secret_key:           { env: "PAGA_SECRET_KEY",           ph: "REPLACE_ME_PAGA_SECRET" },
+      paga_hash_key:             { env: "PAGA_HASH_KEY",             ph: "REPLACE_ME_PAGA_HASH" },
+      flutterwave_public_key:    { env: "FLUTTERWAVE_PUBLIC_KEY",    ph: "FLWPUBK_TEST-REPLACE_ME" },
+      flutterwave_secret_key:    { env: "FLUTTERWAVE_SECRET_KEY",    ph: "FLWSECK_TEST-REPLACE_ME" },
+      flutterwave_encryption_key:{ env: "FLUTTERWAVE_ENCRYPTION_KEY",ph: "FLWSECK_TEST_REPLACE" },
+      jap_api_key:               { env: "JAP_API_KEY",               ph: "REPLACE_ME_JAP_API_KEY" },
+      grizzly_api_key:           { env: "GRIZZLY_SMS_API_KEY",       ph: "REPLACE_ME_GRIZZLY_KEY" },
+      fivesim_api_key:           { env: "FIVESIM_API_KEY",           ph: "REPLACE_ME_5SIM_KEY" },
+      smspool_api_key:           { env: "SMSPOOL_API_KEY",           ph: "REPLACE_ME_SMSPOOL_KEY" },
+      telegram_bot_token:        { env: "TELEGRAM_BOT_TOKEN",        ph: "REPLACE_ME_TELEGRAM_BOT_TOKEN" },
+      telegram_webhook_secret:   { env: "TELEGRAM_WEBHOOK_SECRET",   ph: "REPLACE_ME_TELEGRAM_WEBHOOK_SECRET" },
+      smtp_host:                 { env: "SMTP_HOST",                 ph: "smtp.yourmailserver.com" },
+      smtp_user:                 { env: "SMTP_USER",                 ph: "no-reply@avsnova.com" },
+      smtp_pass:                 { env: "SMTP_PASS",                 ph: "REPLACE_ME_SMTP_PASSWORD" },
+      smtp_from:                 { env: "SMTP_FROM",                 ph: "AVS Nova <no-reply@avsnova.com>" },
     };
-    for (const [col, val] of Object.entries(ph)) {
-      // Set only when the column is currently NULL or '' — never overwrite an existing value.
-      try { await dbRun(`UPDATE settings SET ${col} = ? WHERE (${col} IS NULL OR ${col} = '')`, [val]); } catch (e) { /* column may not exist on very old schemas */ }
+    // True if a stored value is one of our inert placeholders (never a real key).
+    const isPlaceholder = (v) => {
+      if (v == null) return true;
+      const s = String(v).trim();
+      if (s === "") return true;
+      return /REPLACE_ME|_REPLACE\b|yourmailserver\.com/i.test(s)
+        || s === "0000000000"
+        || s === "no-reply@avsnova.com"
+        || s === "AVS Nova <no-reply@avsnova.com>";
+    };
+    const existing = (await dbGet("SELECT * FROM settings LIMIT 1")) || {};
+    let syncedFromEnv = 0, healedPlaceholders = 0;
+    for (const [col, { env, ph }] of Object.entries(KEY_MAP)) {
+      const envVal = process.env[env] != null ? String(process.env[env]).trim() : "";
+      const dbVal  = existing[col];
+      try {
+        if (envVal !== "") {
+          // (1) .env is authoritative — always sync the real value into the DB.
+          if (String(dbVal ?? "") !== envVal) {
+            await dbRun(`UPDATE settings SET ${col} = ? WHERE 1=1`, [envVal]);
+            syncedFromEnv++;
+          }
+        } else if (isPlaceholder(dbVal)) {
+          // (3) No env value and DB is blank/placeholder — (re)write the inert placeholder so the
+          //     field stays visible/editable. Does NOT touch real admin-entered values (case 2).
+          if (String(dbVal ?? "") !== ph) {
+            await dbRun(`UPDATE settings SET ${col} = ? WHERE 1=1`, [ph]);
+            healedPlaceholders++;
+          }
+        }
+        // (2) envVal empty AND dbVal is a real value -> leave it exactly as-is.
+      } catch (e) { /* column may not exist on very old schemas */ }
     }
-  } catch (err) { console.warn("[Seed] placeholder integration keys skipped:", err.message); }
+    if (syncedFromEnv > 0) {
+      console.log(`[Seed] Integration keys: synced ${syncedFromEnv} real value(s) from .env into settings (env is authoritative; any stale placeholders overwritten).`);
+    }
+    if (healedPlaceholders > 0) {
+      console.log(`[Seed] Integration keys: ${healedPlaceholders} unconfigured field(s) show inert placeholders (editable in Admin -> Settings).`);
+    }
+  } catch (err) { console.warn("[Seed] integration key sync skipped:", err.message); }
 
   // ============================================================================
   //  SECURITY CENTER — PHASE 2: EMAIL VERIFICATION
