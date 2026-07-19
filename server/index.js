@@ -312,24 +312,38 @@ const enforcePriceFloor = (computedSell, providerCost, minProfit) => {
 
 // Initialize the database (schema + seed). First verify the MySQL server is reachable so a
 // connection problem fails ONCE with clear, actionable guidance instead of an ECONNREFUSED loop.
-try {
-  const conn = await verifyDbConnection();
-  if (!conn.ok) {
-    console.error("\n[FATAL] Database connection failed.\n" + conn.message + "\n");
-    process.exit(1);
+//
+// IMPORTANT (cPanel / CloudLinux / LiteSpeed Node.js Selector compatibility):
+//   This bootstrap is wrapped in an async function that is *called* (not `await`ed) instead of
+//   using a bare top-level `await`. A module that uses top-level await becomes an "async ESM
+//   graph", and process managers that load the entry via `require()` (e.g. LiteSpeed's lsnode.js)
+//   then fail with `ERR_REQUIRE_ASYNC_MODULE: require() cannot be used on an ESM graph with
+//   top-level await`. Keeping the await inside a normal async function avoids that entirely while
+//   behaving identically under `node server/index.js`, `npm run dev` and `npm start`.
+async function bootstrapDatabase() {
+  try {
+    const conn = await verifyDbConnection();
+    if (!conn.ok) {
+      console.error("\n[FATAL] Database connection failed.\n" + conn.message + "\n");
+      process.exit(1);
+    }
+    await initDb();
+    console.log(`Database initialized successfully (${getActiveDbType() === "mysql" ? "MySQL" : "SQLite"}, ${process.env.NODE_ENV || "development"} mode).`);
+    // Referral fix: guarantee every existing user has a unique referral code.
+    await backfillReferralCodes();
+    // Load dashboard-managed Telegram config (token/secret/categories/digest/severity).
+    await loadTelegramConfig();
+    // Start the bot: webhook (if registered) or long-polling (localhost/dev). Deferred so all
+    // handlers/functions are defined first.
+    setTimeout(() => { try { telegramAutoStart(); } catch (e) {} }, 1500);
+  } catch (e) {
+    console.error("Database initialization failed:", e);
   }
-  await initDb();
-  console.log(`Database initialized successfully (${getActiveDbType() === "mysql" ? "MySQL" : "SQLite"}, ${process.env.NODE_ENV || "development"} mode).`);
-  // Referral fix: guarantee every existing user has a unique referral code.
-  await backfillReferralCodes();
-  // Load dashboard-managed Telegram config (token/secret/categories/digest/severity).
-  await loadTelegramConfig();
-  // Start the bot: webhook (if registered) or long-polling (localhost/dev). Deferred so all
-  // handlers/functions are defined first.
-  setTimeout(() => { try { telegramAutoStart(); } catch (e) {} }, 1500);
-} catch (e) {
-  console.error("Database initialization failed:", e);
 }
+// Fire-and-forget: kicks off DB init while the rest of the module (routes) registers. The public
+// /api/health endpoint reports "degraded"/503 until the DB is actually ready, and the frontend
+// polls it before making API calls, so serving before init completes is safe.
+bootstrapDatabase();
 
 // ---------------------------------------------------------------------------
 // Health check — public, dependency-free, and cheap. The frontend polls this
