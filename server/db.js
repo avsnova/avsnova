@@ -159,7 +159,11 @@ function translateSql(query) {
   // masks the bug — so we ALWAYS convert `TEXT DEFAULT '<literal>'` to a VARCHAR of adequate size
   // that CAN hold a default. 1024 comfortably covers our defaulted text columns (statuses, short
   // messages, JSON snippets like '[]' / '{}'). Columns without a default keep TEXT unchanged.
-  q = q.replace(/\bTEXT\s+DEFAULT\s+('(?:[^'\\]|\\.)*')/gi, "VARCHAR(1024) DEFAULT $1");
+  // MySQL 8.0 forbids a literal DEFAULT on TEXT/BLOB columns (ER 1101). Convert to a modest
+  // VARCHAR that CAN hold a default. Keep it SMALL (191) so many such columns don't blow past
+  // MySQL's ~65,535-byte per-row limit (each VARCHAR counts toward it in-row; TEXT barely does).
+  // 191 chars is ample for our defaulted fields (statuses, short messages, '[]' / '{}' / URLs).
+  q = q.replace(/\bTEXT\s+DEFAULT\s+('(?:[^'\\]|\\.)*')/gi, "VARCHAR(191) DEFAULT $1");
   // Older MySQL/MariaDB reject "CREATE INDEX IF NOT EXISTS". These are wrapped in try/catch at
   // the call sites (re-running is harmless), so we drop the unsupported clause.
   q = q.replace(/CREATE\s+(UNIQUE\s+)?INDEX\s+IF\s+NOT\s+EXISTS/gi, "CREATE $1INDEX");
@@ -2180,6 +2184,40 @@ export const initDb = async () => {
     await dbRun("UPDATE settings SET jap_api_url = COALESCE(NULLIF(jap_api_url, ''), 'https://justanotherpanel.com/api/v2'), sms_api_url = COALESCE(NULLIF(sms_api_url, ''), 'https://api.grizzlysms.com/stubs/handler_api.php')");
   }
 
+  // ——— Visible, editable placeholder integration keys (Admin → Settings) ———
+  // Fills each key column with a clearly-marked PLACEHOLDER only when it's still empty AND no real
+  // value is provided via env. This guarantees every integration field is VISIBLE and EDITABLE in
+  // the Admin Panel (not blank), so the operator can replace them by hand. It NEVER overwrites a
+  // real key: env value wins first, an existing DB value is kept, and only a truly-empty field gets
+  // the placeholder. Placeholders are inert (they won't authenticate) and safe to ship.
+  try {
+    const ph = {
+      paystack_public_key: process.env.PAYSTACK_PUBLIC_KEY || "pk_test_REPLACE_ME",
+      paystack_secret_key: process.env.PAYSTACK_SECRET_KEY || "sk_test_REPLACE_ME",
+      monnify_api_key: process.env.MONNIFY_API_KEY || "MK_TEST_REPLACE_ME",
+      monnify_secret_key: process.env.MONNIFY_SECRET_KEY || "REPLACE_ME_MONNIFY_SECRET",
+      monnify_contract_code: process.env.MONNIFY_CONTRACT_CODE || "0000000000",
+      paga_public_key: process.env.PAGA_PUBLIC_KEY || "REPLACE_ME_PAGA_PUBLIC",
+      paga_secret_key: process.env.PAGA_SECRET_KEY || "REPLACE_ME_PAGA_SECRET",
+      paga_hash_key: process.env.PAGA_HASH_KEY || "REPLACE_ME_PAGA_HASH",
+      flutterwave_public_key: process.env.FLUTTERWAVE_PUBLIC_KEY || "FLWPUBK_TEST-REPLACE_ME",
+      flutterwave_secret_key: process.env.FLUTTERWAVE_SECRET_KEY || "FLWSECK_TEST-REPLACE_ME",
+      flutterwave_encryption_key: process.env.FLUTTERWAVE_ENCRYPTION_KEY || "FLWSECK_TEST_REPLACE",
+      jap_api_key: process.env.JAP_API_KEY || "REPLACE_ME_JAP_API_KEY",
+      grizzly_api_key: process.env.GRIZZLY_SMS_API_KEY || "REPLACE_ME_GRIZZLY_KEY",
+      fivesim_api_key: process.env.FIVESIM_API_KEY || "REPLACE_ME_5SIM_KEY",
+      smspool_api_key: process.env.SMSPOOL_API_KEY || "REPLACE_ME_SMSPOOL_KEY",
+      smtp_host: process.env.SMTP_HOST || "smtp.yourmailserver.com",
+      smtp_user: process.env.SMTP_USER || "no-reply@avsnova.com",
+      smtp_pass: process.env.SMTP_PASS || "REPLACE_ME_SMTP_PASSWORD",
+      smtp_from: process.env.SMTP_FROM || "AVS Nova <no-reply@avsnova.com>",
+    };
+    for (const [col, val] of Object.entries(ph)) {
+      // Set only when the column is currently NULL or '' — never overwrite an existing value.
+      try { await dbRun(`UPDATE settings SET ${col} = ? WHERE (${col} IS NULL OR ${col} = '')`, [val]); } catch (e) { /* column may not exist on very old schemas */ }
+    }
+  } catch (err) { console.warn("[Seed] placeholder integration keys skipped:", err.message); }
+
   // ============================================================================
   //  SECURITY CENTER — PHASE 2: EMAIL VERIFICATION
   //  Provider profiles + mailbox accounts + per-credential matching rules + logs.
@@ -2688,6 +2726,19 @@ export const initDb = async () => {
       console.log("           or set SUPER_ADMIN_PASSWORD in .env before first boot.");
       console.log("=".repeat(66) + "\n");
     }
+  } else if (String(process.env.ADMIN_PASSWORD_RESET || "").toLowerCase() === "true" && process.env.SUPER_ADMIN_PASSWORD) {
+    // RECOVERY: an admin already exists but you're locked out. Set ADMIN_PASSWORD_RESET=true and
+    // SUPER_ADMIN_PASSWORD (+ optionally SUPER_ADMIN_EMAIL) in .env, restart ONCE, then log in and
+    // REMOVE the flag. This force-resets the existing Super Admin's email + password from env.
+    const adminEmail = process.env.SUPER_ADMIN_EMAIL || existingSuperAdmin.email;
+    const hashed = await bcrypt.hash(String(process.env.SUPER_ADMIN_PASSWORD), 12);
+    await dbRun("UPDATE users SET email = ?, password = ? WHERE id = ?", [adminEmail, hashed, existingSuperAdmin.id]);
+    console.log("\n" + "=".repeat(66));
+    console.log("[Recovery] ADMIN_PASSWORD_RESET applied — Super Admin credentials reset from .env:");
+    console.log(`        Email:    ${adminEmail}`);
+    console.log("        Password: (the SUPER_ADMIN_PASSWORD you set in .env)");
+    console.log("        ⚠  Now REMOVE ADMIN_PASSWORD_RESET from .env and restart.");
+    console.log("=".repeat(66) + "\n");
   }
 
   // ——— ASYNCHRONOUS LIVE SMM CATALOG BACKGROUND SEEDER ———
