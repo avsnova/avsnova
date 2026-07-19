@@ -120,10 +120,24 @@ const JWT_SECRET = (() => {
 // Secrets are sourced from DB settings first, then environment. No hardcoded credentials.
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY || "";
 
+// Truthful integration status banner — reports each integration as "active" (env value present)
+// or "not configured" (empty), so the startup log reflects reality instead of a hardcoded claim.
+// Note: keys can ALSO be set later from the Admin Panel (DB settings), which override env at call
+// time; this banner reflects the .env values available at boot.
+const _envSet = (k) => !!(process.env[k] && String(process.env[k]).trim());
+const _status = (label, ...keys) => `  ${keys.every(_envSet) ? "✔ active        " : "· not configured"}  ${label}`;
 console.log("-----------------------------------------------------");
-console.log("[Aurevashop Server] STRICT PRODUCTION ENFORCEMENT ON");
-console.log("[Aurevashop Server] Sandbox/Mock modes: PERMANENTLY DISABLED");
-console.log("[Aurevashop Server] Paystack Integration: ACTIVE (Live keys connected)");
+console.log("[AVS Nova] Integration status (from .env at boot):");
+console.log(_status("Paystack", "PAYSTACK_SECRET_KEY"));
+console.log(_status("Monnify", "MONNIFY_API_KEY", "MONNIFY_SECRET_KEY", "MONNIFY_CONTRACT_CODE"));
+console.log(_status("Paga", "PAGA_PUBLIC_KEY", "PAGA_SECRET_KEY", "PAGA_HASH_KEY"));
+console.log(_status("Flutterwave", "FLUTTERWAVE_SECRET_KEY"));
+console.log(_status("SMTP (email)", "SMTP_HOST", "SMTP_USER", "SMTP_PASS"));
+console.log(_status("SMM / JustAnotherPanel", "JAP_API_KEY"));
+console.log(_status("Grizzly SMS", "GRIZZLY_SMS_API_KEY"));
+console.log(_status("5SIM", "FIVESIM_API_KEY"));
+console.log(_status("SMSPool", "SMSPOOL_API_KEY"));
+console.log("  (integration keys can also be set later in Admin Panel → System settings)");
 console.log("-----------------------------------------------------");
 
 // Dynamic Integration Credentials Getters
@@ -200,7 +214,7 @@ async function snapshotSettings(changedBy, note) {
     );
     // Trim to the newest 30 snapshots.
     await dbRun(
-      "DELETE FROM settings_snapshots WHERE id NOT IN (SELECT id FROM settings_snapshots ORDER BY id DESC LIMIT 30)"
+      "DELETE FROM settings_snapshots WHERE id NOT IN (SELECT id FROM (SELECT id FROM settings_snapshots ORDER BY id DESC LIMIT 30) AS keep)"
     );
   } catch (e) {
     console.error("[Settings] snapshot failed:", e.message);
@@ -508,7 +522,7 @@ async function logPrivilegedAction({ actorId, actorName, channel, action, detail
       "INSERT INTO privileged_audit (actor_id, actor_name, channel, action, detail, status, ip_address, device, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
       [actorId || null, actorName || "unknown", channel || "web", action || "", String(detail || "").slice(0, 500), status || "ok", ip || "", device || "", new Date().toISOString()]
     );
-    await dbRun("DELETE FROM privileged_audit WHERE id NOT IN (SELECT id FROM privileged_audit ORDER BY id DESC LIMIT 5000)");
+    await dbRun("DELETE FROM privileged_audit WHERE id NOT IN (SELECT id FROM (SELECT id FROM privileged_audit ORDER BY id DESC LIMIT 5000) AS keep)");
   } catch (e) { /* auditing must never break the flow */ }
 }
 
@@ -1244,7 +1258,7 @@ async function tgLog({ chatId, staffName, direction, action, detail, status = "o
       "INSERT INTO telegram_log (chat_id, staff_name, direction, action, detail, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
       [chatId ? String(chatId) : null, staffName || null, direction || "out", action || "", String(detail || "").slice(0, 500), status, new Date().toISOString()]
     );
-    await dbRun("DELETE FROM telegram_log WHERE id NOT IN (SELECT id FROM telegram_log ORDER BY id DESC LIMIT 1000)");
+    await dbRun("DELETE FROM telegram_log WHERE id NOT IN (SELECT id FROM (SELECT id FROM telegram_log ORDER BY id DESC LIMIT 1000) AS keep)");
   } catch (e) { /* logging must never break the flow */ }
 }
 
@@ -1595,7 +1609,7 @@ app.post("/api/auth/login", async (req, res) => {
         [user.id, ip, ua.slice(0, 400), meta.device, meta.browser, meta.os, new Date().toISOString()]
       );
       // Keep only the most recent 50 sessions per user to bound growth.
-      await dbRun("DELETE FROM login_sessions WHERE user_id = ? AND id NOT IN (SELECT id FROM login_sessions WHERE user_id = ? ORDER BY id DESC LIMIT 50)", [user.id, user.id]);
+      await dbRun("DELETE FROM login_sessions WHERE user_id = ? AND id NOT IN (SELECT id FROM (SELECT id FROM login_sessions WHERE user_id = ? ORDER BY id DESC LIMIT 50) AS keep)", [user.id, user.id]);
     } catch (e) { /* non-fatal */ }
 
     const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: "24h" });
@@ -5354,10 +5368,10 @@ app.post("/api/admin/payment-methods/toggle", authenticateToken, async (req, res
     // effectively a SINGLE enable/disable switch (mirrors the other gateways). This prevents the
     // "enables then disables itself" behaviour caused by two independent flags.
     if (name === "Flutterwave") {
-      await dbRun("UPDATE settings SET flutterwave_enabled = ? WHERE id = (SELECT id FROM settings LIMIT 1)", [val]);
+      await dbRun("UPDATE settings SET flutterwave_enabled = ? WHERE id = (SELECT id FROM (SELECT id FROM settings LIMIT 1) AS s)", [val]);
     }
     if (name === "Monnify") {
-      await dbRun("UPDATE settings SET monnify_enabled = ? WHERE id = (SELECT id FROM settings LIMIT 1)", [val]);
+      await dbRun("UPDATE settings SET monnify_enabled = ? WHERE id = (SELECT id FROM (SELECT id FROM settings LIMIT 1) AS s)", [val]);
     }
     await logAuditAction(req.user.id, req.user.username, `Toggled payment method ${name} to ${val === 1 ? 'Enabled' : 'Disabled'}`, req.ip);
     res.json({ success: true });
@@ -11283,7 +11297,7 @@ async function logSyncEvent(provider, kind, status, detail) {
       [provider, kind, status, String(detail || "").slice(0, 500), new Date().toISOString()]
     );
     // Keep the log bounded to the most recent 500 rows.
-    await dbRun("DELETE FROM sync_log WHERE id NOT IN (SELECT id FROM sync_log ORDER BY id DESC LIMIT 500)");
+    await dbRun("DELETE FROM sync_log WHERE id NOT IN (SELECT id FROM (SELECT id FROM sync_log ORDER BY id DESC LIMIT 500) AS keep)");
   } catch (e) { /* logging must never break the caller */ }
 }
 

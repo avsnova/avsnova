@@ -289,8 +289,14 @@ export const initDb = async () => {
   // De-duplicate any pre-existing duplicate history rows, keeping the earliest per session,
   // BEFORE creating the unique index (otherwise index creation would fail).
   try {
+    // MySQL forbids referencing the DELETE target table directly inside a subquery's FROM
+    // ("You can't specify target table ... for update in FROM clause"). Wrapping the subquery in a
+    // derived table with an alias (SELECT ... FROM ( ... ) AS keep) materializes it first, which
+    // MySQL allows. This keeps the earliest (MIN id) row per (provider, provider_session_id).
     await dbRun(`DELETE FROM operational_history WHERE id NOT IN (
-      SELECT MIN(id) FROM operational_history GROUP BY provider, provider_session_id
+      SELECT keep_id FROM (
+        SELECT MIN(id) AS keep_id FROM operational_history GROUP BY provider, provider_session_id
+      ) AS keep
     ) AND provider_session_id IS NOT NULL`);
   } catch (err) { console.warn("operational_history dedupe skipped:", err.message); }
   // Enforce exactly one completed history record per (provider, session) — DB-level guarantee
@@ -2079,14 +2085,16 @@ export const initDb = async () => {
     await dbRun("INSERT INTO sidebar_items (id, label, icon, active, order_index) VALUES ('How to Use', 'How to Use', 'HelpCircle', 1, 13)");
     await dbRun("INSERT INTO sidebar_items (id, label, icon, active, order_index) VALUES ('Support', 'Support', 'LifeBuoy', 1, 14)");
 
-    // Seed Payment Methods (Requirement 17 / Paga Integration)
-    await dbRun("INSERT OR IGNORE INTO payment_methods (name, enabled, updated_by, updated_at) VALUES ('Paystack', 1, 'System', datetime('now'))");
-    await dbRun("INSERT OR IGNORE INTO payment_methods (name, enabled, updated_by, updated_at) VALUES ('Paga Subsidiary Accounts', 1, 'System', datetime('now'))");
-    await dbRun("INSERT OR IGNORE INTO payment_methods (name, enabled, updated_by, updated_at) VALUES ('Recharge Code', 1, 'System', datetime('now'))");
   }
 
-  // Ensure the Flutterwave payment method row always exists (idempotent, runs on every boot so
-  // existing databases get it too). Disabled by default until an admin configures + enables it.
+  // Ensure the core payment-method rows ALWAYS exist (idempotent, runs on every boot so existing
+  // databases get them too — not gated on any other seed block). Paystack / Paga / Recharge Code
+  // default ENABLED so a fresh storefront has working funding options out of the box; Monnify and
+  // Flutterwave default DISABLED until an admin configures + enables them.
+  await dbRun("INSERT OR IGNORE INTO payment_methods (name, enabled, updated_by, updated_at) VALUES ('Paystack', 1, 'System', datetime('now'))");
+  await dbRun("INSERT OR IGNORE INTO payment_methods (name, enabled, updated_by, updated_at) VALUES ('Paga Subsidiary Accounts', 1, 'System', datetime('now'))");
+  await dbRun("INSERT OR IGNORE INTO payment_methods (name, enabled, updated_by, updated_at) VALUES ('Recharge Code', 1, 'System', datetime('now'))");
+  await dbRun("INSERT OR IGNORE INTO payment_methods (name, enabled, updated_by, updated_at) VALUES ('Monnify', 0, 'System', datetime('now'))");
   await dbRun("INSERT OR IGNORE INTO payment_methods (name, enabled, updated_by, updated_at) VALUES ('Flutterwave', 0, 'System', datetime('now'))");
 
   // Seed Support Module defaults (Item 3) — only if empty
