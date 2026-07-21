@@ -8,7 +8,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import crypto from "crypto";
 import nodemailer from "nodemailer";
-import { initDb, dbRun, dbGet, dbAll, getActiveDbType, verifyDbConnection } from "./db.js";
+import { initDb, dbRun, dbGet, dbAll, getActiveDbType, verifyDbConnection, fetchWithTimeout } from "./db.js";
 import smsRouter from "./routes/sms.js";
 import { getGrizzlyBalance } from "./services/grizzlySms.js";
 import { requireRole } from "./middleware/requireRole.js";
@@ -180,7 +180,7 @@ const fetchLiveExchangeRate = async () => {
     return cachedExchangeRate;
   }
   try {
-    const res = await fetch("https://open.er-api.com/v6/latest/USD");
+    const res = await fetchWithTimeout("https://open.er-api.com/v6/latest/USD", {}, 10000);
     const data = await res.json();
     if (data && data.rates && data.rates.NGN) {
       cachedExchangeRate = data.rates.NGN;
@@ -2133,7 +2133,10 @@ app.post("/api/paystack/initialize", authenticateToken, async (req, res) => {
 
   try {
     const dynamicSecret = await getPaystackSecretKey();
-    const response = await fetch("https://api.paystack.co/transaction/initialize", {
+    if (!dynamicSecret) {
+      return res.status(503).json({ success: false, error: "Paystack is not configured (missing secret key). Add it in Admin → Settings or .env." });
+    }
+    const response = await fetchWithTimeout("https://api.paystack.co/transaction/initialize", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -2161,7 +2164,10 @@ app.get("/api/paystack/verify/:reference", authenticateToken, async (req, res) =
 
   try {
     const dynamicSecret = await getPaystackSecretKey();
-    const response = await fetch(`https://api.paystack.co/transaction/verify/${reference}`, {
+    if (!dynamicSecret) {
+      return res.status(503).json({ success: false, error: "Paystack is not configured (missing secret key). Add it in Admin → Settings or .env." });
+    }
+    const response = await fetchWithTimeout(`https://api.paystack.co/transaction/verify/${reference}`, {
       method: "GET",
       headers: {
         Authorization: `Bearer ${dynamicSecret}`,
@@ -2254,7 +2260,7 @@ async function flutterwaveVerify({ transactionId, txRef }, secretKey) {
     return { status: "error", message: "No transaction id or reference supplied." };
   }
   console.log(`[Flutterwave][verify-request] ${transactionId ? "by id " + transactionId : "by reference " + txRef}`);
-  const resp = await fetch(url, {
+  const resp = await fetchWithTimeout(url, {
     method: "GET",
     headers: { Authorization: `Bearer ${secretKey}`, "Content-Type": "application/json" },
   });
@@ -2643,7 +2649,7 @@ app.post("/api/admin/flutterwave/test", authenticateToken, async (req, res) => {
     const cfg = await getFlutterwaveConfig();
     const secret = (req.body && req.body.secretKey) ? req.body.secretKey : cfg.secretKey;
     if (!secret) return res.status(400).json({ success: false, error: "No secret key configured." });
-    const resp = await fetch("https://api.flutterwave.com/v3/balances", {
+    const resp = await fetchWithTimeout("https://api.flutterwave.com/v3/balances", {
       method: "GET",
       headers: { Authorization: `Bearer ${secret}`, "Content-Type": "application/json" },
     });
@@ -3271,13 +3277,19 @@ app.post("/api/admin/settings", authenticateToken, async (req, res) => {
         ]
       );
     } else {
+      // Preserve existing values for any field the admin form DID NOT send. Previously omitted
+      // fields were bound as `undefined` (crash: "Bind parameters must not contain undefined")
+      // and, even once coerced, would have NULLED-OUT existing settings. We read the current row
+      // and fall back to it per-field so a partial save only changes what was actually submitted.
+      const cur = (await dbGet("SELECT * FROM settings WHERE id = ?", [row.id])) || {};
+      const keep = (val, col, dflt = null) => (val !== undefined ? val : (cur[col] !== undefined && cur[col] !== null ? cur[col] : dflt));
       await dbRun(
         "UPDATE settings SET site_name = ?, site_favicon = ?, whatsapp_number = ?, external_support_url = ?, site_logo = ?, maintenance_mode = ?, smm_multiplier = ?, smm_flat_addition = ?, smtp_host = ?, smtp_port = ?, smtp_user = ?, smtp_pass = ?, smtp_from = ?, shipping_cost_sim_esim = ?, shipping_cost_lagos = ?, shipping_cost_abuja = ?, shipping_cost_national = ?, paystack_public_key = ?, paystack_secret_key = ?, jap_api_url = ?, jap_api_key = ?, paga_public_key = ?, paga_secret_key = ?, paga_hash_key = ?, paga_base_url = ? WHERE id = ?",
         [
-          site_name, site_favicon || "", whatsapp_number, external_support_url, site_logo, maintenance_mode, 
-          smm_multiplier, smm_flat_addition, smtp_host, smtp_port, smtp_user, smtp_pass, 
-          smtp_from, shipping_cost_sim_esim, shipping_cost_lagos, shipping_cost_abuja, shipping_cost_national, paystack_public_key, paystack_secret_key, 
-          jap_api_url, jap_api_key, paga_public_key, paga_secret_key, paga_hash_key, paga_base_url || "https://beta-collect.paga.com/", row.id
+          keep(site_name, "site_name"), keep(site_favicon, "site_favicon", ""), keep(whatsapp_number, "whatsapp_number"), keep(external_support_url, "external_support_url"), keep(site_logo, "site_logo"), keep(maintenance_mode, "maintenance_mode"),
+          keep(smm_multiplier, "smm_multiplier"), keep(smm_flat_addition, "smm_flat_addition"), keep(smtp_host, "smtp_host"), keep(smtp_port, "smtp_port"), keep(smtp_user, "smtp_user"), keep(smtp_pass, "smtp_pass"),
+          keep(smtp_from, "smtp_from"), keep(shipping_cost_sim_esim, "shipping_cost_sim_esim"), keep(shipping_cost_lagos, "shipping_cost_lagos"), keep(shipping_cost_abuja, "shipping_cost_abuja"), keep(shipping_cost_national, "shipping_cost_national"), keep(paystack_public_key, "paystack_public_key"), keep(paystack_secret_key, "paystack_secret_key"),
+          keep(jap_api_url, "jap_api_url"), keep(jap_api_key, "jap_api_key"), keep(paga_public_key, "paga_public_key"), keep(paga_secret_key, "paga_secret_key"), keep(paga_hash_key, "paga_hash_key"), keep(paga_base_url, "paga_base_url", "https://beta-collect.paga.com/"), row.id
         ]
       );
     }

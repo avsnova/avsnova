@@ -111,18 +111,28 @@ export default function AddMoneySheet({ isOpen, onClose, onFundSuccess, paystack
     try {
       if (method === "paystack") {
         const key = paystackPublicKey || "";
+        // Guard: a blank/invalid public key makes PaystackPop open a popup that never fires
+        // callback OR onClose, so the spinner would hang forever. Fail fast with a clear message.
+        if (!key || !/^pk_(test|live)_/.test(key)) {
+          throw new Error("Paystack isn't configured correctly (missing/invalid public key). Please contact support or try another method.");
+        }
         if (!(window as any).PaystackPop) throw new Error("Paystack is still loading, try again.");
-        const handler = (window as any).PaystackPop.setup({
-          key, email: userEmail || "customer@aurevashop.org", amount: Math.round(amt * 100), currency: "NGN",
-          callback: (resp: any) => {
-            apiFetch(`/api/paystack/verify/${resp.reference}`).then((v: any) => {
-              if (v.success) { toast(`🎉 ₦${amt.toLocaleString()} added successfully.`, "success", { big: true }); finishSuccess(amt, "Paystack", resp.reference); }
-              else { toast("Verification failed.", "error"); setBusy(false); }
-            }).catch((e: any) => { toast(e.message, "error"); setBusy(false); });
-          },
-          onClose: () => { toast("Payment cancelled.", "info"); setBusy(false); },
-        });
-        handler.openIframe();
+        try {
+          const handler = (window as any).PaystackPop.setup({
+            key, email: userEmail || "customer@aurevashop.org", amount: Math.round(amt * 100), currency: "NGN",
+            callback: (resp: any) => {
+              apiFetch(`/api/paystack/verify/${resp.reference}`).then((v: any) => {
+                if (v.success) { toast(`🎉 ₦${amt.toLocaleString()} added successfully.`, "success", { big: true }); finishSuccess(amt, "Paystack", resp.reference); }
+                else { toast("Verification failed.", "error"); setBusy(false); }
+              }).catch((e: any) => { toast(e.message, "error"); setBusy(false); });
+            },
+            onClose: () => { toast("Payment cancelled.", "info"); setBusy(false); },
+          });
+          handler.openIframe();
+        } catch (setupErr: any) {
+          // If the SDK throws while opening (bad key/config), clear the spinner instead of hanging.
+          throw new Error(setupErr?.message || "Could not open the Paystack checkout. Please try again.");
+        }
       } else if (method === "flutterwave") {
         const r = await startFlutterwavePayment({ purpose: "wallet", amount: amt, customerEmail: userEmail, title: "Fund AVS Wallet", description: `Wallet top-up of ₦${amt.toLocaleString()}` });
         if (r.success) { toast(`🎉 ₦${amt.toLocaleString()} added successfully.`, "success", { big: true }); finishSuccess(amt, "Flutterwave"); }

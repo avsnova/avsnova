@@ -8,7 +8,7 @@
 //
 // Auth: OAuth2 Basic (base64 of "apiKey:secretKey") -> POST /api/v1/auth/login -> bearer token.
 
-import { dbGet } from "../db.js";
+import { dbGet, fetchWithTimeout } from "../db.js";
 
 const SANDBOX_BASE = "https://sandbox.monnify.com";
 const LIVE_BASE = "https://api.monnify.com";
@@ -48,7 +48,7 @@ export async function getMonnifyToken(cfg) {
     return _tokenCache.token;
   }
   const basic = Buffer.from(`${cfg.apiKey}:${cfg.secretKey}`).toString("base64");
-  const resp = await fetch(`${cfg.baseUrl}/api/v1/auth/login`, {
+  const resp = await fetchWithTimeout(`${cfg.baseUrl}/api/v1/auth/login`, {
     method: "POST",
     headers: { Authorization: `Basic ${basic}`, "Content-Type": "application/json" },
   });
@@ -66,7 +66,7 @@ export async function getMonnifyToken(cfg) {
 export async function createMonnifyReservedAccount({ accountReference, accountName, customerEmail, customerName }, cfgIn) {
   const cfg = cfgIn || (await getMonnifyConfig());
   const token = await getMonnifyToken(cfg);
-  const resp = await fetch(`${cfg.baseUrl}/api/v2/bank-transfer/reserved-accounts`, {
+  const resp = await fetchWithTimeout(`${cfg.baseUrl}/api/v2/bank-transfer/reserved-accounts`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -92,7 +92,7 @@ export async function createMonnifyReservedAccount({ accountReference, accountNa
 export async function getMonnifyReservedAccountDetails(accountReference, cfgIn) {
   const cfg = cfgIn || (await getMonnifyConfig());
   const token = await getMonnifyToken(cfg);
-  const resp = await fetch(`${cfg.baseUrl}/api/v2/bank-transfer/reserved-accounts/${encodeURIComponent(accountReference)}`, {
+  const resp = await fetchWithTimeout(`${cfg.baseUrl}/api/v2/bank-transfer/reserved-accounts/${encodeURIComponent(accountReference)}`, {
     method: "GET",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
   });
@@ -106,7 +106,7 @@ export async function verifyMonnifyTransaction(transactionReference, cfgIn) {
   const cfg = cfgIn || (await getMonnifyConfig());
   const token = await getMonnifyToken(cfg);
   const url = `${cfg.baseUrl}/api/v2/transactions/${encodeURIComponent(transactionReference)}`;
-  const resp = await fetch(url, {
+  const resp = await fetchWithTimeout(url, {
     method: "GET",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
   });
@@ -123,7 +123,7 @@ export async function verifyMonnifyByPaymentReference(paymentReference, cfgIn) {
   const cfg = cfgIn || (await getMonnifyConfig());
   const token = await getMonnifyToken(cfg);
   const url = `${cfg.baseUrl}/api/v2/merchant/transactions/query?paymentReference=${encodeURIComponent(paymentReference)}`;
-  const resp = await fetch(url, {
+  const resp = await fetchWithTimeout(url, {
     method: "GET",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
   });
@@ -141,7 +141,7 @@ export async function listMonnifyReservedAccountTransactions(accountReference, c
   const cfg = cfgIn || (await getMonnifyConfig());
   const token = await getMonnifyToken(cfg);
   const url = `${cfg.baseUrl}/api/v1/bank-transfer/reserved-accounts/transactions?accountReference=${encodeURIComponent(accountReference)}&page=${page}&size=${size}`;
-  const resp = await fetch(url, {
+  const resp = await fetchWithTimeout(url, {
     method: "GET",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
   });
@@ -177,7 +177,7 @@ export function normalizeMonnifyTxn(b) {
 export async function initMonnifyTransaction({ amount, customerName, customerEmail, paymentReference, paymentDescription, redirectUrl }, cfgIn) {
   const cfg = cfgIn || (await getMonnifyConfig());
   const token = await getMonnifyToken(cfg);
-  const resp = await fetch(`${cfg.baseUrl}/api/v1/merchant/transactions/init-transaction`, {
+  const resp = await fetchWithTimeout(`${cfg.baseUrl}/api/v1/merchant/transactions/init-transaction`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify({

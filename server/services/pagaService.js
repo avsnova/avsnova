@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import { dbGet } from "../db.js";
+import { dbGet, fetchWithTimeout } from "../db.js";
 
 // Load configuration variables with production defaults (database-first, then process.env)
 const getPagaConfig = async () => {
@@ -94,7 +94,7 @@ export async function createPagaPersistentPaymentAccount({
 
   console.log(`[Paga Service] Outbound Persistent Wallet Account Creation Post: ${url}`, JSON.stringify(requestBody));
 
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(url, {
     method: "POST",
     headers,
     body: JSON.stringify(requestBody)
@@ -135,7 +135,7 @@ export async function getPagaPersistentPaymentAccount(accountIdentifier, referen
     "hash": computedHash
   };
 
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(url, {
     method: "POST",
     headers,
     body: JSON.stringify(requestBody)

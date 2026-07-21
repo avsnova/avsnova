@@ -92,13 +92,50 @@ export const verifyDbConnection = async () => {
 
 // Helper to run a write/DDL query. The result is normalized so callers can rely on `.lastID`
 // and `.changes` (mysql2 exposes insertId/affectedRows).
+// mysql2 throws "Bind parameters must not contain undefined. To pass SQL NULL specify JS null"
+// if ANY bind value is `undefined`. This happens all over the app whenever a request payload
+// omits an optional field (e.g. a partial Admin → Settings save), or a destructured value is
+// missing. Rather than patch 1000+ call sites individually, we normalise `undefined` -> `null`
+// once here, at the single choke point every parameterized query passes through. `null` maps to
+// SQL NULL, which is the intended semantics for a missing/optional value. This is a pure safety
+// net; call sites that already pass proper values are unaffected.
+const sanitizeParams = (params) => {
+  if (!Array.isArray(params)) return params;
+  return params.map((p) => (p === undefined ? null : p));
+};
+
+// Fetch with a HARD timeout. A bare fetch() has NO default timeout, so if a payment gateway
+// (Paystack/Flutterwave/Monnify/Paga) or any external API is unreachable — firewalled outbound
+// port, DNS black-hole, wrong endpoint, provider outage — the request hangs FOREVER. On the
+// server that means the HTTP handler never responds, and on the client the "processing…" spinner
+// never clears (the reported "payment stuck loading indefinitely"). This wraps fetch with an
+// AbortController so it always rejects within `timeoutMs`, turning an invisible hang into a clear,
+// catchable error the endpoint can surface to the user.
+export const fetchWithTimeout = async (url, options = {}, timeoutMs = 20000) => {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: ctrl.signal });
+  } catch (err) {
+    if (err && err.name === "AbortError") {
+      const e = new Error(`Request to ${(() => { try { return new URL(url).host; } catch { return url; } })()} timed out after ${Math.round(timeoutMs / 1000)}s`);
+      e.code = "ETIMEDOUT";
+      throw e;
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
 export const dbRun = (query, params = []) => {
   const finalQuery = translateSql(query);
+  const safeParams = sanitizeParams(params);
   return new Promise((resolve, reject) => {
     // DDL → query() (mysql2 can't prepare DDL); parameterized DML → execute().
     const runner = isDdl(finalQuery)
       ? mysqlPool.query(finalQuery)
-      : mysqlPool.execute(finalQuery, params);
+      : mysqlPool.execute(finalQuery, safeParams);
     runner
       .then(([result]) => resolve({
         lastID: result && result.insertId,
@@ -114,8 +151,9 @@ export const dbRun = (query, params = []) => {
 // Helper to get a single row (or null).
 export const dbGet = (query, params = []) => {
   const finalQuery = translateSql(query);
+  const safeParams = sanitizeParams(params);
   return new Promise((resolve, reject) => {
-    mysqlPool.execute(finalQuery, params)
+    mysqlPool.execute(finalQuery, safeParams)
       .then(([rows]) => resolve(rows[0] || null))
       .catch(reject);
   });
@@ -124,8 +162,9 @@ export const dbGet = (query, params = []) => {
 // Helper to get all rows.
 export const dbAll = (query, params = []) => {
   const finalQuery = translateSql(query);
+  const safeParams = sanitizeParams(params);
   return new Promise((resolve, reject) => {
-    mysqlPool.execute(finalQuery, params)
+    mysqlPool.execute(finalQuery, safeParams)
       .then(([rows]) => resolve(rows))
       .catch(reject);
   });
