@@ -151,6 +151,22 @@ function translateSql(query) {
 
   // Type/keyword fixes.
   q = q.replace(/AUTOINCREMENT/gi, "AUTO_INCREMENT");
+
+  // Force every table to be created as utf8mb4 REGARDLESS of the database's default charset.
+  // WHY: a `CREATE TABLE` with no explicit charset inherits the DATABASE default. If the prod
+  // database default is latin1 (common on shared cPanel/CloudLinux MySQL), text columns become
+  // latin1 even though the CONNECTION is utf8mb4 — so:
+  //   • an emoji column DEFAULT (e.g. settings.site_logo '🛡️', docs.icon '📄') fails at CREATE
+  //     with ER_INVALID_DEFAULT (1067), and
+  //   • later INSERTs of emoji values (category/product icons like 🟢/🎁) fail with 1366.
+  // Appending an explicit table charset fixes both and never changes any column definition. We
+  // only touch `CREATE TABLE` statements and only if they don't already specify a charset.
+  if (/^\s*CREATE\s+TABLE\b/i.test(q) && !/\bCHARSET\b/i.test(q) && !/\bCHARACTER\s+SET\b/i.test(q)) {
+    // Attach the charset after the table body's final closing paren (the last ')' in the
+    // statement, ignoring trailing whitespace/semicolons). The nested ')' inside VARCHAR(n)
+    // are safely ignored because we anchor to the very last ')'.
+    q = q.replace(/\)(\s*;?\s*)$/, ") DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci$1");
+  }
   q = q.replace(/datetime\('now'\)/gi, "NOW()");
   // MySQL cannot put a UNIQUE/index on a bare TEXT column without a key length. These columns
   // hold short references, so VARCHAR(255) is the correct, index-friendly equivalent.
