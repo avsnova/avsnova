@@ -1,8 +1,12 @@
 import mysql from "mysql2/promise";
 import bcrypt from "bcryptjs";
 import dotenv from "dotenv";
+import path from "path";
+import { fileURLToPath } from "url";
 
-dotenv.config();
+// Load .env from the app root by ABSOLUTE path (parent of server/), not the process cwd, so the
+// DB config is found regardless of where/how the process is launched (see note in server/index.js).
+dotenv.config({ path: path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".env") });
 
 // ─── Database engine: MySQL / MariaDB ONLY ───────────────────────────────────
 // This project uses MySQL as its single database engine in every environment (development AND

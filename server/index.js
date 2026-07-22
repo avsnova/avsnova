@@ -25,8 +25,12 @@ import * as featureFlags from "./services/featureFlags.js";
 import * as smsPools from "./services/sms/pools.js";
 import * as paymentRegistry from "./services/payments/registry.js";
 
-// Load environment variables
-dotenv.config();
+// Load environment variables from the app root's .env using an ABSOLUTE path (not the process
+// cwd). Plain dotenv.config() reads ./.env relative to the CURRENT WORKING DIRECTORY; under some
+// Passenger/cron/launch scenarios the cwd is not the app root, which would silently skip .env and
+// crash with "Missing required database configuration". Anchoring to import.meta.url guarantees
+// the real .env (app-root/.env, i.e. the parent of server/) is always loaded.
+dotenv.config({ path: path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".env") });
 
 const app = express();
 
@@ -63,13 +67,13 @@ if ((process.env.NODE_ENV || "development") === "production" && CORS_ORIGINS.len
 // frame-ancestors) preventing the site from being framed for clickjacking.
 const CSP = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' https://js.paystack.co https://checkout.flutterwave.com",
-  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "script-src 'self' 'unsafe-inline' https://js.paystack.co https://paystack.com https://*.paystack.co https://*.paystack.com https://checkout.flutterwave.com",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://paystack.com https://*.paystack.co https://*.paystack.com",
   "font-src 'self' data: https://fonts.gstatic.com",
   "img-src 'self' data: blob: https:",
   "media-src 'self' data: blob: https:",
   "connect-src 'self' https:",
-  "frame-src 'self' https://checkout.flutterwave.com https://js.paystack.co https://www.youtube.com https://youtube.com",
+  "frame-src 'self' https://js.paystack.co https://paystack.com https://*.paystack.co https://*.paystack.com https://checkout.flutterwave.com https://www.youtube.com https://youtube.com",
   "frame-ancestors 'none'",
   "object-src 'none'",
   "base-uri 'self'",
@@ -97,8 +101,14 @@ app.use(express.json({
 }));
 
 // Serve uploaded media (announcement images/videos, etc.)
-try { if (!fs.existsSync("./uploads")) fs.mkdirSync("./uploads", { recursive: true }); } catch (e) {}
-app.use("/uploads", express.static("./uploads"));
+// UPLOADS_DIR is an ABSOLUTE path anchored to the app root (parent of server/), NOT the process
+// cwd. Under cPanel Passenger the cwd is normally the app root, but relying on a relative
+// "./uploads" is fragile — if the process is ever started from a different working directory the
+// writes/reads would silently target the wrong place. Anchoring to import.meta.url makes uploads
+// work identically regardless of how/where the process is launched.
+const UPLOADS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "uploads");
+try { if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true }); } catch (e) {}
+app.use("/uploads", express.static(UPLOADS_DIR));
 
 const PORT = process.env.PORT || 5000;
 const NODE_ENV = process.env.NODE_ENV || "development";
@@ -8093,7 +8103,7 @@ app.post("/api/admin/upload", authenticateToken, async (req, res) => {
       return res.json({ success: true, url: dup.url, mime, duplicate: true, mediaId: dup.id });
     }
 
-    fs.writeFileSync(`./uploads/${name}`, buf);
+    fs.writeFileSync(path.join(UPLOADS_DIR, name), buf);
     const url = `/uploads/${name}`;
     const kind = mime.startsWith("image/") ? "image" : mime.startsWith("video/") ? "video" : "document";
     const folder = (req.body && req.body.folder) ? String(req.body.folder).slice(0, 120) : "General";
@@ -8212,13 +8222,13 @@ app.post("/api/admin/media/scan", authenticateToken, async (req, res) => {
   if (!isUserAdmin(req.user)) return res.status(403).json({ error: "Access denied." });
   try {
     let added = 0;
-    const files = fs.existsSync("./uploads") ? fs.readdirSync("./uploads") : [];
+    const files = fs.existsSync(UPLOADS_DIR) ? fs.readdirSync(UPLOADS_DIR) : [];
     for (const f of files) {
       const url = `/uploads/${f}`;
       const exists = await dbGet("SELECT id FROM media_library WHERE url = ?", [url]);
       if (exists) continue;
       let size = 0, hash = null;
-      try { const buf = fs.readFileSync("./uploads/" + f); size = buf.length; hash = crypto.createHash("sha256").update(buf).digest("hex"); } catch (e) {}
+      try { const buf = fs.readFileSync(path.join(UPLOADS_DIR, f)); size = buf.length; hash = crypto.createHash("sha256").update(buf).digest("hex"); } catch (e) {}
       const ext = (f.split(".").pop() || "").toLowerCase();
       const kind = ["png", "jpg", "jpeg", "webp", "gif", "img"].includes(ext) ? "image" : ["mp4", "webm", "mov", "vid"].includes(ext) ? "video" : "document";
       const mime = kind === "image" ? `image/${ext === "jpg" ? "jpeg" : ext}` : kind === "video" ? `video/${ext}` : "application/octet-stream";

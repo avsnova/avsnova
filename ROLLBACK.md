@@ -1,63 +1,74 @@
-# Rollback & Recovery Guide (Virtual Number System)
+# AVS Nova — Rollback Guide (cPanel + Passenger)
 
-This project uses Git + reversible DB migrations so any change has a recovery path.
+Use this if a deploy causes a regression. Rollbacks here are **code-only**; your MySQL data and
+`.env` are never touched by these steps.
 
-## Branch model
-- `main` — stable/production.
-- `develop` — integration branch.
-- `feature/*`, `bugfix/*`, `release/*` — work branches.
-- Tag stable releases: `git tag -a vX.Y.Z -m "..."`.
+---
 
-## One-click code rollback
+## Quick reference
+
+| Symptom | Fastest fix |
+|---|---|
+| Homepage shows **"Cannot GET /"** | Frontend not built — just run `npm run build` + Restart (no rollback needed) |
+| Bad code deployed | `git checkout <last-good-commit>` → `npm install && npm run build` → Restart |
+| App won't boot (`/api/health` down) | Check `.env` (DB creds) + Node log; then rollback code if needed |
+| Frontend broken, API fine | Rebuild `dist/` (`npm run build`) + Restart; API keeps serving meanwhile |
+
+---
+
+## A. Roll back to the previous good commit
+
 ```bash
-# See tags / history
-git tag
-git log --oneline
+cd ~/avs-app
+git log --oneline -10                 # identify the last-known-good <hash>
+git checkout <hash>                    # detached checkout of the good version
+#   (or, to move the branch: git reset --hard <hash>)
+npm install                            # deps for that version
+npm run build                          # rebuild the frontend for that version
+```
+Then **Setup Node.js App → Restart** (or `touch ~/avs-app/tmp/restart.txt`) and hard-refresh.
 
-# Roll the working tree back to the known-good baseline
-git checkout v1.0.0-baseline        # detached HEAD to inspect
-# or hard reset a branch to it (DESTRUCTIVE to uncommitted work):
-git reset --hard v1.0.0-baseline
+Return to the latest branch tip later with: `git checkout <branch>` (e.g. `git checkout main`).
 
-# Roll back just the last commit but keep history:
-git revert HEAD
+---
+
+## B. "Cannot GET /" — not a rollback, just rebuild
+
+This means `dist/` is missing (the build step was skipped). No code rollback needed:
+```bash
+cd ~/avs-app
+npm run build
+```
+Restart the app. Confirm with:
+```bash
+curl -s https://avsnova.com/api/health   # deploy.frontend_dist_bytes should be > 0
 ```
 
-`v1.0.0-baseline` = the state captured before the Virtual Number restructure.
+---
 
-## Database migration rollback
-Migrations live in `server/migrations/` and are tracked in `schema_migrations`.
+## C. App fails to boot after deploy
+
+1. Check the Node app's **stderr log** (Setup Node.js App → log, or `~/avs-app/stderr.log`).
+2. Most common cause: **`.env`** missing/incorrect DB values →
+   `[FATAL] Missing required database configuration`. Fix `.env`, Restart.
+3. If it's a code fault, roll back with **Section A**.
+
+---
+
+## D. Verify after any rollback
+
 ```bash
-npm run migrate:status     # list applied [x] / pending [ ]
-npm run migrate            # apply all pending (up)
-npm run migrate:down       # roll back the most recent migration (down)
+curl -s -o /dev/null -w "GET / -> %{http_code}\n" https://avsnova.com/          # 200
+curl -s https://avsnova.com/api/health                                          # status: ok
 ```
-Each migration file exports `up()` and `down()`. `down()` reverses the change where safe.
-> SQLite note: dropping columns is unsafe on older versions, so column-adding migrations keep
-> the (nullable, harmless) columns on `down()` and drop only indexes/tables. For a *full* revert
-> of columns, restore the DB file from backup (below).
+Confirm the Admin Panel loads and integrations still show correct keys.
 
-## Database file backup/restore (full revert)
-```bash
-# Backup (do this before any migration / deploy)
-cp database.sqlite database.sqlite.bak-$(date +%Y%m%d-%H%M%S)
+---
 
-# Restore
-cp database.sqlite.bak-XXXX database.sqlite
-```
+## Safety notes
 
-## Feature-flag rollback (instant, no redeploy)
-Every new Virtual-Number behavior is behind a flag (table `feature_flags`, admin UI/API
-`/api/admin/feature-flags`). To instantly disable a new behavior:
-```bash
-# via admin API (admin token):
-curl -X POST /api/admin/feature-flags -d '{"key":"sms_txn_safe_purchase","enabled":false}'
-```
-Flags default to the OLD proven behavior, so turning a flag OFF restores prior behavior.
-
-## Pre-deploy checklist
-1. `cp database.sqlite database.sqlite.bak-...`
-2. `git commit` all changes; tag if releasing.
-3. `npm run migrate:status` then `npm run migrate`.
-4. `node server/services/sms/__tests__/purchaseGuard.test.mjs` (must pass).
-5. `./node_modules/.bin/tsc --noEmit` and `npm run build` (must succeed).
+- **Data is safe:** rollbacks change code only. Never `DROP` the database to fix a deploy.
+- **`.env` is preserved:** it's git-ignored and app-managed; rollbacks don't overwrite it.
+- **Uploads are preserved:** `uploads/` lives in the app root, outside the build output.
+- The backend keeps serving the API even when the frontend build is missing, so a rebuild fully
+  restores the site with zero data impact.
