@@ -360,11 +360,34 @@ app.get("/api/health", async (req, res) => {
   } catch (e) {
     dbOk = false;
   }
+  // Deployment fingerprint — lets us verify EXACTLY which files are live on the server
+  // (critical when files are uploaded manually and versions can drift out of sync). Reports the
+  // last-modified time of the key deployed files. If these dates don't all match a single
+  // deploy, the server is running a MIXED build — the usual cause of "impossible" bugs.
+  let deploy = {};
+  try {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const stamp = (rel) => {
+      try { return fs.statSync(path.join(here, rel)).mtime.toISOString(); }
+      catch { return "missing"; }
+    };
+    const distIndex = path.resolve(here, "..", "dist", "index.html");
+    let frontend = "missing";
+    let frontendBytes = 0;
+    try { const s = fs.statSync(distIndex); frontend = s.mtime.toISOString(); frontendBytes = s.size; } catch {}
+    deploy = {
+      backend_index_js: stamp("index.js"),
+      backend_db_js: stamp("db.js"),
+      frontend_dist_index_html: frontend,
+      frontend_dist_bytes: frontendBytes,
+    };
+  } catch { /* non-fatal */ }
   const payload = {
     status: dbOk ? "ok" : "degraded",
     ready: dbOk,
     uptimeSec: Math.floor((Date.now() - SERVER_BOOT_TIME) / 1000),
     time: new Date().toISOString(),
+    deploy,
   };
   res.status(dbOk ? 200 : 503).json(payload);
 });
