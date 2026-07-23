@@ -158,9 +158,17 @@ export default function Sidebar({
     <>
       {/* Mobile Backdrop */}
       {isMobileOpen && (
-        <div 
-          className="fixed inset-0 bg-black/80 backdrop-blur-sm z-40 md:hidden" 
-          onClick={onCloseMobile} 
+        <div
+          className="fixed inset-0 bg-black/80 backdrop-blur-sm z-40 md:hidden"
+          // Samsung Internet often DROPS the synthetic `click` on a fixed overlay that has
+          // backdrop-blur (a GPU compositing layer), so tapping the backdrop would not close the
+          // menu — it looked frozen. onPointerUp is the reliable cross-browser signal (fires on
+          // Samsung Internet, Chrome, Firefox, Edge, iOS Safari). We keep onClick as a fallback for
+          // any engine without Pointer Events and guard against double-firing.
+          onPointerUp={(e) => { e.preventDefault(); onCloseMobile(); }}
+          onClick={onCloseMobile}
+          style={{ touchAction: "manipulation" }}
+          aria-hidden="true"
         />
       )}
 

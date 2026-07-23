@@ -121,6 +121,7 @@ export default function AddMoneySheet({ isOpen, onClose, onFundSuccess, paystack
           const handler = (window as any).PaystackPop.setup({
             key, email: userEmail || "customer@aurevashop.org", amount: Math.round(amt * 100), currency: "NGN",
             callback: (resp: any) => {
+              setBusy(true); // verifying now
               apiFetch(`/api/paystack/verify/${resp.reference}`).then((v: any) => {
                 if (v.success) { toast(`🎉 ₦${amt.toLocaleString()} added successfully.`, "success", { big: true }); finishSuccess(amt, "Paystack", resp.reference); }
                 else { toast("Verification failed.", "error"); setBusy(false); }
@@ -129,6 +130,12 @@ export default function AddMoneySheet({ isOpen, onClose, onFundSuccess, paystack
             onClose: () => { toast("Payment cancelled.", "info"); setBusy(false); },
           });
           handler.openIframe();
+          // The Paystack popup is now the active UI. Immediately release the parent modal's busy
+          // state so the user is NEVER trapped behind an infinite spinner if Paystack's callback /
+          // onClose fails to fire (a known InlineJS issue on some mobile browsers, e.g. when the
+          // popup is dismissed via a back-gesture). Success still navigates away via finishSuccess;
+          // verification re-arms the spinner only while the /verify call is in flight.
+          setBusy(false);
         } catch (setupErr: any) {
           // If the SDK throws while opening (bad key/config), clear the spinner instead of hanging.
           throw new Error(setupErr?.message || "Could not open the Paystack checkout. Please try again.");

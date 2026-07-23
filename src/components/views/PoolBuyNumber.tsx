@@ -453,12 +453,17 @@ function HudDropdown({ open, onToggle, onClose, placeholder, selectedLabel, sele
   const inputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (!open) return;
-    const onDoc = (e: MouseEvent) => { if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) onClose(); };
+    // Use POINTERDOWN, not mousedown, for outside-click close. iOS Safari does not fire `mousedown`
+    // reliably for taps on arbitrary elements, so on iPhone the Service dropdown's outside-click
+    // detection misbehaved — selecting a service after a pool/region malfunctioned. pointerdown
+    // fires consistently on iOS Safari, Android, Chrome, Firefox and Edge. We also skip closing
+    // when the tap is inside the dropdown wrapper (so option taps register normally).
+    const onDoc = (e: Event) => { if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) onClose(); };
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("pointerdown", onDoc);
     document.addEventListener("keydown", onKey);
     setTimeout(() => inputRef.current?.focus(), 40);
-    return () => { document.removeEventListener("mousedown", onDoc); document.removeEventListener("keydown", onKey); };
+    return () => { document.removeEventListener("pointerdown", onDoc); document.removeEventListener("keydown", onKey); };
   }, [open, onClose]);
 
   return (
